@@ -384,6 +384,7 @@ class TelegramTradingBot:
     async def log_to_debug(self, message: str):
         if DEBUG_GROUP_ID:
             try:
+                await self.app.get_chat(DEBUG_GROUP_ID)
                 await self.app.send_message(DEBUG_GROUP_ID,
                                             f"**Bot Log:** {message}")
             except Exception as e:
@@ -2401,6 +2402,7 @@ class TelegramTradingBot:
 
         if DEBUG_GROUP_ID:
             try:
+                await self.app.get_chat(DEBUG_GROUP_ID)
                 await self.app.send_message(
                     DEBUG_GROUP_ID,
                     "**Bot Started!** Trading bot is now online and ready.")
