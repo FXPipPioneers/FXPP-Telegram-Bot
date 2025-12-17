@@ -57,6 +57,10 @@ def safe_int(value: str, default: int = 0) -> int:
         return default
 
 
+TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID", "0"))
+TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
+
+
 BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "0"))
 FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID", "0"))
 VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
@@ -69,6 +73,10 @@ WHOP_PURCHASE_LINK = os.getenv("WHOP_PURCHASE_LINK",
 
 if TELEGRAM_BOT_TOKEN:
     print(f"Telegram bot token loaded")
+if TELEGRAM_API_ID:
+    print(f"Telegram API ID loaded")
+if TELEGRAM_API_HASH:
+    print(f"Telegram API Hash loaded")
 if BOT_OWNER_USER_ID:
     print(f"Bot owner ID loaded: {BOT_OWNER_USER_ID}")
 if VIP_TRIAL_INVITE_LINK:
@@ -285,8 +293,19 @@ class TelegramTradingBot:
         if not TELEGRAM_BOT_TOKEN:
             raise ValueError(
                 "TELEGRAM_BOT_TOKEN environment variable is required")
+        if not TELEGRAM_API_ID:
+            raise ValueError(
+                "TELEGRAM_API_ID environment variable is required")
+        if not TELEGRAM_API_HASH:
+            raise ValueError(
+                "TELEGRAM_API_HASH environment variable is required")
 
-        self.app = Client("trading_bot", bot_token=TELEGRAM_BOT_TOKEN)
+        self.app = Client(
+            "trading_bot",
+            api_id=TELEGRAM_API_ID,
+            api_hash=TELEGRAM_API_HASH,
+            bot_token=TELEGRAM_BOT_TOKEN
+        )
         self.db_pool = None
         self.client_session = None
         self.last_online_time = None
