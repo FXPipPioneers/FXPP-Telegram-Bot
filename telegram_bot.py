@@ -345,7 +345,7 @@ class TelegramTradingBot:
         async def dm_status_command(client, message: Message):
             await self.handle_dm_status(client, message)
 
-        @self.app.on_message(filters.command("timedautorole"))
+        @self.app.on_message(filters.command("freetrialusers"))
         async def timed_auto_role_command(client, message: Message):
             await self.handle_timed_auto_role(client, message)
 
@@ -378,13 +378,225 @@ class TelegramTradingBot:
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "timedautorole"
+                "dbstatus", "dmstatus", "freetrialusers"
             ]))
         async def text_input_handler(client, message: Message):
             await self.handle_text_input(client, message)
 
+        @self.app.on_message(
+            filters.group & filters.text & ~filters.command([
+                "entry", "activetrades", "tradeoverride", "pricetest",
+                "dbstatus", "dmstatus", "freetrialusers"
+            ]))
+        async def group_message_handler(client, message: Message):
+            await self.handle_group_message(client, message)
+
     async def is_owner(self, user_id: int) -> bool:
         return user_id == BOT_OWNER_USER_ID
+
+    async def handle_group_message(self, client: Client, message: Message):
+        """Handle messages in groups - detect manual signals from owner"""
+        if not message.from_user:
+            return
+
+        if not await self.is_owner(message.from_user.id):
+            return
+
+        if message.chat.id == DEBUG_GROUP_ID:
+            return
+
+        if message.chat.id not in [VIP_GROUP_ID, FREE_GROUP_ID]:
+            return
+
+        if "Trade Signal For:" not in message.text:
+            return
+
+        await self.log_to_debug(
+            f"Manual signal detected from owner in {'VIP' if message.chat.id == VIP_GROUP_ID else 'Free'} group"
+        )
+
+        try:
+            trade_data = self.parse_signal_message(message.text)
+
+            if not trade_data:
+                await self.log_to_debug(
+                    "Failed to parse manual signal - invalid format or missing data"
+                )
+                return
+
+            pair = trade_data.get('pair')
+            action = trade_data.get('action')
+            entry_price = trade_data.get('entry')
+
+            if not pair or not action or not entry_price:
+                await self.log_to_debug(
+                    f"Missing required fields - pair: {pair}, action: {action}, entry: {entry_price}"
+                )
+                return
+
+            await self.log_to_debug(
+                f"Parsed manual signal: {pair} {action} @ {entry_price}"
+            )
+
+            if pair in EXCLUDED_FROM_TRACKING:
+                await self.log_to_debug(
+                    f"Skipping tracking for {pair} (excluded from auto-tracking)"
+                )
+                return
+
+            assigned_api = await self.get_working_api_for_pair(pair)
+
+            live_price = await self.get_live_price(pair)
+            if live_price:
+                live_tracking_levels = self.calculate_tp_sl_levels(live_price, pair, action)
+                await self.log_to_debug(
+                    f"Manual signal tracking setup for {pair}:\n"
+                    f"- User entered price: {entry_price}\n"
+                    f"- Live price at signal: {live_price}\n"
+                    f"- Tracking TP1: {live_tracking_levels['tp1']:.5f}\n"
+                    f"- Tracking TP2: {live_tracking_levels['tp2']:.5f}\n"
+                    f"- Tracking TP3: {live_tracking_levels['tp3']:.5f}\n"
+                    f"- Tracking SL: {live_tracking_levels['sl']:.5f}"
+                )
+            else:
+                live_tracking_levels = self.calculate_tp_sl_levels(entry_price, pair, action)
+                live_price = entry_price
+                await self.log_to_debug(
+                    f"Could not get live price for {pair}, using entered price for tracking"
+                )
+
+            group_name = "VIP" if message.chat.id == VIP_GROUP_ID else "Free"
+            trade_key = f"{message.chat.id}_{message.id}"
+
+            parsed_entry_type = trade_data.get('entry_type')
+            if not parsed_entry_type:
+                parsed_entry_type = f"{action.lower()} execution"
+
+            full_trade_data = {
+                'message_id': str(message.id),
+                'trade_key': trade_key,
+                'chat_id': message.chat.id,
+                'pair': pair,
+                'action': action,
+                'entry_type': parsed_entry_type,
+                'entry_price': float(entry_price),
+                'tp1_price': float(live_tracking_levels['tp1']),
+                'tp2_price': float(live_tracking_levels['tp2']),
+                'tp3_price': float(live_tracking_levels['tp3']),
+                'sl_price': float(live_tracking_levels['sl']),
+                'entry': float(live_price),
+                'tp1': float(live_tracking_levels['tp1']),
+                'tp2': float(live_tracking_levels['tp2']),
+                'tp3': float(live_tracking_levels['tp3']),
+                'sl': float(live_tracking_levels['sl']),
+                'telegram_entry': float(entry_price),
+                'telegram_tp1': float(trade_data.get('tp1') or live_tracking_levels['tp1']),
+                'telegram_tp2': float(trade_data.get('tp2') or live_tracking_levels['tp2']),
+                'telegram_tp3': float(trade_data.get('tp3') or live_tracking_levels['tp3']),
+                'telegram_sl': float(trade_data.get('sl') or live_tracking_levels['sl']),
+                'live_entry': float(live_price),
+                'assigned_api': assigned_api,
+                'status': trade_data.get('status', 'active'),
+                'tp_hits': [],
+                'manual_overrides': [],
+                'breakeven_active': False,
+                'created_at': datetime.now(AMSTERDAM_TZ).isoformat(),
+                'group_name': group_name,
+                'channel_id': message.chat.id
+            }
+
+            PRICE_TRACKING_CONFIG['active_trades'][trade_key] = full_trade_data
+            await self.save_trade_to_db(trade_key, full_trade_data)
+            asyncio.create_task(
+                self.check_single_trade_immediately(trade_key, full_trade_data))
+
+            await self.log_to_debug(
+                f"Manual signal tracking activated: {pair} {action} @ {live_price} in {group_name} group"
+            )
+
+            logger.info(
+                f"NEW MANUAL SIGNAL DETECTED: {pair} {action} @ {live_price}"
+            )
+
+        except Exception as e:
+            import traceback
+            full_traceback = traceback.format_exc()
+            await self.log_to_debug(
+                f"Error processing manual signal: {str(e)}\n{full_traceback[:1500]}"
+            )
+            logger.error(f"Error processing manual signal: {e}")
+
+    def parse_signal_message(self, content: str) -> Optional[Dict]:
+        """Parse a trading signal message to extract trade data"""
+        try:
+            trade_data = {
+                "pair": None,
+                "action": None,
+                "entry": None,
+                "tp1": None,
+                "tp2": None,
+                "tp3": None,
+                "sl": None,
+                "status": "active",
+                "tp_hits": [],
+                "breakeven_active": False,
+                "entry_type": None
+            }
+
+            pair_match = re.search(r'Trade Signal For:\s*\*?\*?([A-Z0-9/]+)\*?\*?', content, re.IGNORECASE)
+            if pair_match:
+                raw_pair = pair_match.group(1).strip()
+                trade_data["pair"] = raw_pair.upper().replace("/", "").replace("-", "").replace("_", "")
+
+            entry_type_match = re.search(
+                r'Entry Type:\s*\*?\*?(Buy|Sell)\s+(execution|limit)\*?\*?', content, re.IGNORECASE)
+            if entry_type_match:
+                action = entry_type_match.group(1).upper()
+                order_type = entry_type_match.group(2).lower()
+                trade_data["action"] = action
+                trade_data["entry_type"] = f"{action.lower()} {order_type}"
+                if order_type == "limit":
+                    trade_data["status"] = "pending_entry"
+                else:
+                    trade_data["status"] = "active"
+            else:
+                if "BUY" in content.upper():
+                    trade_data["action"] = "BUY"
+                elif "SELL" in content.upper():
+                    trade_data["action"] = "SELL"
+
+            entry_match = re.search(r'Entry Price:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            if entry_match:
+                trade_data["entry"] = float(entry_match.group(1))
+            else:
+                entry_match = re.search(r'Entry[:\s]*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+                if entry_match:
+                    trade_data["entry"] = float(entry_match.group(1))
+
+            tp1_match = re.search(r'Take Profit 1:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            if tp1_match:
+                trade_data["tp1"] = float(tp1_match.group(1))
+
+            tp2_match = re.search(r'Take Profit 2:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            if tp2_match:
+                trade_data["tp2"] = float(tp2_match.group(1))
+
+            tp3_match = re.search(r'Take Profit 3:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            if tp3_match:
+                trade_data["tp3"] = float(tp3_match.group(1))
+
+            sl_match = re.search(r'Stop Loss:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            if sl_match:
+                trade_data["sl"] = float(sl_match.group(1))
+
+            if trade_data["pair"] and trade_data["action"] and trade_data["entry"]:
+                return trade_data
+            else:
+                return None
+
+        except Exception as e:
+            logger.error(f"Error parsing signal message: {e}")
+            return None
 
     async def log_to_debug(self, message: str):
         if DEBUG_GROUP_ID:
@@ -707,6 +919,25 @@ class TelegramTradingBot:
         if sent_messages and track_price:
             assigned_api = await self.get_working_api_for_pair(pair)
 
+            live_price = await self.get_live_price(pair)
+            if live_price:
+                live_tracking_levels = self.calculate_tp_sl_levels(live_price, pair, action)
+                await self.log_to_debug(
+                    f"Price tracking setup for {pair}:\n"
+                    f"- User entered price: {entry_price}\n"
+                    f"- Live price at signal: {live_price}\n"
+                    f"- Tracking TP1: {live_tracking_levels['tp1']:.5f}\n"
+                    f"- Tracking TP2: {live_tracking_levels['tp2']:.5f}\n"
+                    f"- Tracking TP3: {live_tracking_levels['tp3']:.5f}\n"
+                    f"- Tracking SL: {live_tracking_levels['sl']:.5f}"
+                )
+            else:
+                live_tracking_levels = levels
+                live_price = entry_price
+                await self.log_to_debug(
+                    f"Could not get live price for {pair}, using user-entered price for tracking"
+                )
+
             for msg_info in sent_messages:
                 sent_msg = msg_info['message']
                 channel_id = msg_info['channel_id']
@@ -722,21 +953,21 @@ class TelegramTradingBot:
                     'action': action,
                     'entry_type': entry_type,
                     'entry_price': float(entry_price),
-                    'tp1_price': float(levels['tp1']),
-                    'tp2_price': float(levels['tp2']),
-                    'tp3_price': float(levels['tp3']),
-                    'sl_price': float(levels['sl']),
-                    'entry': float(entry_price),
-                    'tp1': float(levels['tp1']),
-                    'tp2': float(levels['tp2']),
-                    'tp3': float(levels['tp3']),
-                    'sl': float(levels['sl']),
+                    'tp1_price': float(live_tracking_levels['tp1']),
+                    'tp2_price': float(live_tracking_levels['tp2']),
+                    'tp3_price': float(live_tracking_levels['tp3']),
+                    'sl_price': float(live_tracking_levels['sl']),
+                    'entry': float(live_price),
+                    'tp1': float(live_tracking_levels['tp1']),
+                    'tp2': float(live_tracking_levels['tp2']),
+                    'tp3': float(live_tracking_levels['tp3']),
+                    'sl': float(live_tracking_levels['sl']),
                     'telegram_entry': float(entry_price),
                     'telegram_tp1': float(levels['tp1']),
                     'telegram_tp2': float(levels['tp2']),
                     'telegram_tp3': float(levels['tp3']),
                     'telegram_sl': float(levels['sl']),
-                    'live_entry': None,
+                    'live_entry': float(live_price),
                     'assigned_api': assigned_api,
                     'status': 'active',
                     'tp_hits': [],
@@ -1420,9 +1651,9 @@ class TelegramTradingBot:
             return
 
         keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("View Status", callback_data="tar_status")],
+            [[InlineKeyboardButton("View Stats", callback_data="tar_status")],
              [
-                 InlineKeyboardButton("List Active Trials",
+                 InlineKeyboardButton("List Active Users",
                                       callback_data="tar_list")
              ], [InlineKeyboardButton("Cancel", callback_data="tar_cancel")]])
 
@@ -1811,46 +2042,57 @@ class TelegramTradingBot:
     async def check_price_levels(self, message_id: str, trade_data: dict):
         pair = trade_data.get('pair')
         action = trade_data.get('action')
-        entry_price = trade_data.get('entry_price')
         tp1 = trade_data.get('tp1_price')
         tp2 = trade_data.get('tp2_price')
         tp3 = trade_data.get('tp3_price')
         sl = trade_data.get('sl_price')
         tp_hits = trade_data.get('tp_hits', [])
+        breakeven_active = trade_data.get('breakeven_active', False)
+        live_entry = trade_data.get('live_entry') or trade_data.get('entry')
 
-        live_price = await self.get_live_price(pair)
-        if not live_price:
+        current_price = await self.get_live_price(pair)
+        if not current_price:
             return
 
         is_buy = action.upper() == "BUY"
 
         if is_buy:
-            if live_price <= sl:
-                await self.handle_sl_hit(message_id, trade_data, live_price)
+            if breakeven_active and live_entry:
+                if current_price <= live_entry:
+                    await self.handle_breakeven_hit(message_id, trade_data)
+                    return
+            elif current_price <= sl:
+                await self.handle_sl_hit(message_id, trade_data, current_price)
                 return
-            if 'TP1' not in tp_hits and live_price >= tp1:
+
+            if 'TP1' not in tp_hits and current_price >= tp1:
                 await self.handle_tp_hit(message_id, trade_data, 'TP1',
-                                         live_price)
-            if 'TP2' not in tp_hits and live_price >= tp2:
+                                         current_price)
+            if 'TP2' not in tp_hits and current_price >= tp2:
                 await self.handle_tp_hit(message_id, trade_data, 'TP2',
-                                         live_price)
-            if 'TP3' not in tp_hits and live_price >= tp3:
+                                         current_price)
+            if 'TP3' not in tp_hits and current_price >= tp3:
                 await self.handle_tp_hit(message_id, trade_data, 'TP3',
-                                         live_price)
+                                         current_price)
                 return
         else:
-            if live_price >= sl:
-                await self.handle_sl_hit(message_id, trade_data, live_price)
+            if breakeven_active and live_entry:
+                if current_price >= live_entry:
+                    await self.handle_breakeven_hit(message_id, trade_data)
+                    return
+            elif current_price >= sl:
+                await self.handle_sl_hit(message_id, trade_data, current_price)
                 return
-            if 'TP1' not in tp_hits and live_price <= tp1:
+
+            if 'TP1' not in tp_hits and current_price <= tp1:
                 await self.handle_tp_hit(message_id, trade_data, 'TP1',
-                                         live_price)
-            if 'TP2' not in tp_hits and live_price <= tp2:
+                                         current_price)
+            if 'TP2' not in tp_hits and current_price <= tp2:
                 await self.handle_tp_hit(message_id, trade_data, 'TP2',
-                                         live_price)
-            if 'TP3' not in tp_hits and live_price <= tp3:
+                                         current_price)
+            if 'TP3' not in tp_hits and current_price <= tp3:
                 await self.handle_tp_hit(message_id, trade_data, 'TP3',
-                                         live_price)
+                                         current_price)
                 return
 
     async def handle_tp_hit(self, message_id: str, trade_data: dict,
@@ -1906,13 +2148,13 @@ class TelegramTradingBot:
 
         pair = trade.get('pair', 'Unknown')
         action = trade.get('action', 'Unknown')
-        entry_price = trade.get('entry_price', 0)
+        live_entry = trade.get('live_entry') or trade.get('entry') or trade.get('entry_price', 0)
         tp_hits = trade.get('tp_hits', [])
 
         tp_status = f"TPs hit: {', '.join(tp_hits)}" if tp_hits else ""
 
         notification = (f"**BREAKEVEN HIT** {pair} {action}\n\n"
-                        f"Price returned to entry ({entry_price:.5f})\n"
+                        f"Price returned to entry ({live_entry:.5f})\n"
                         f"{tp_status}\n"
                         f"Trade closed at breakeven.")
 
@@ -2489,6 +2731,8 @@ class TelegramTradingBot:
                     except (ValueError, TypeError, KeyError):
                         pass
 
+                    live_entry_val = float(row['live_entry']) if row.get('live_entry') else float(row['entry_price'])
+                    
                     PRICE_TRACKING_CONFIG['active_trades'][trade_key] = {
                         'message_id':
                         original_message_id,
@@ -2513,7 +2757,7 @@ class TelegramTradingBot:
                         'sl_price':
                         float(row['sl_price']),
                         'entry':
-                        float(row['entry_price']),
+                        live_entry_val,
                         'tp1':
                         float(row['tp1_price']),
                         'tp2':
@@ -2767,41 +3011,54 @@ class TelegramTradingBot:
                     continue
 
                 action = trade_data['action']
-                entry = trade_data.get('entry', 0)
+                live_entry = trade_data.get('live_entry') or trade_data.get('entry', 0)
                 tp_hits = trade_data.get('tp_hits', [])
+                breakeven_active = trade_data.get('breakeven_active', False)
 
-                if action == "BUY" and current_price <= trade_data['sl']:
-                    await self.handle_sl_hit(message_id, trade_data,
-                                             current_price)
-                    offline_hits_found += 1
-                    continue
-                elif action == "SELL" and current_price >= trade_data['sl']:
-                    await self.handle_sl_hit(message_id, trade_data,
-                                             current_price)
-                    offline_hits_found += 1
-                    continue
+                if action == "BUY":
+                    if breakeven_active and live_entry:
+                        if current_price <= live_entry:
+                            await self.handle_breakeven_hit(message_id, trade_data)
+                            offline_hits_found += 1
+                            continue
+                    elif current_price <= trade_data['sl_price']:
+                        await self.handle_sl_hit(message_id, trade_data,
+                                                 current_price)
+                        offline_hits_found += 1
+                        continue
+                elif action == "SELL":
+                    if breakeven_active and live_entry:
+                        if current_price >= live_entry:
+                            await self.handle_breakeven_hit(message_id, trade_data)
+                            offline_hits_found += 1
+                            continue
+                    elif current_price >= trade_data['sl_price']:
+                        await self.handle_sl_hit(message_id, trade_data,
+                                                 current_price)
+                        offline_hits_found += 1
+                        continue
 
                 tp_levels_hit = []
 
                 if action == "BUY":
                     if "tp1" not in tp_hits and current_price >= trade_data[
-                            'tp1']:
+                            'tp1_price']:
                         tp_levels_hit.append("tp1")
                     if "tp2" not in tp_hits and current_price >= trade_data[
-                            'tp2']:
+                            'tp2_price']:
                         tp_levels_hit.append("tp2")
                     if "tp3" not in tp_hits and current_price >= trade_data[
-                            'tp3']:
+                            'tp3_price']:
                         tp_levels_hit.append("tp3")
                 elif action == "SELL":
                     if "tp1" not in tp_hits and current_price <= trade_data[
-                            'tp1']:
+                            'tp1_price']:
                         tp_levels_hit.append("tp1")
                     if "tp2" not in tp_hits and current_price <= trade_data[
-                            'tp2']:
+                            'tp2_price']:
                         tp_levels_hit.append("tp2")
                     if "tp3" not in tp_hits and current_price <= trade_data[
-                            'tp3']:
+                            'tp3_price']:
                         tp_levels_hit.append("tp3")
 
                 if tp_levels_hit:
@@ -2811,16 +3068,6 @@ class TelegramTradingBot:
                                                      tp_level, current_price)
                             offline_hits_found += 1
                     continue
-
-                if trade_data.get('breakeven_active'):
-                    if action == "BUY" and current_price <= entry:
-                        await self.handle_breakeven_hit(message_id, trade_data)
-                        offline_hits_found += 1
-                        continue
-                    elif action == "SELL" and current_price >= entry:
-                        await self.handle_breakeven_hit(message_id, trade_data)
-                        offline_hits_found += 1
-                        continue
 
             except Exception as e:
                 logger.error(
@@ -3088,7 +3335,7 @@ class TelegramTradingBot:
                     BotCommand("entry", "Create trading signal (menu)"),
                     BotCommand("tradeoverride",
                                "Override trade status (menu)"),
-                    BotCommand("timedautorole", "Manage trial system (menu)"),
+                    BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM delivery statistics"),
                 ]
