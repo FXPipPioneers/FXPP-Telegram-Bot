@@ -33,6 +33,10 @@ from pyrogram.types import (Message, InlineKeyboardMarkup,
 from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.errors import FloodWait, UserNotParticipant, ChatAdminRequired
 
+import pyrogram.utils as pyrogram_utils
+pyrogram_utils.MIN_CHANNEL_ID = -1009999999999
+pyrogram_utils.MIN_CHAT_ID = -999999999999
+
 from dotenv import load_dotenv
 
 import pytz
