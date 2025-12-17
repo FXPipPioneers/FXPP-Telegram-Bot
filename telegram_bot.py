@@ -2423,7 +2423,7 @@ class TelegramTradingBot:
 
                 await conn.execute('''
                     CREATE TABLE IF NOT EXISTS active_trades (
-                        message_id VARCHAR(50) PRIMARY KEY,
+                        message_id VARCHAR(100) PRIMARY KEY,
                         channel_id BIGINT NOT NULL,
                         guild_id BIGINT NOT NULL,
                         pair VARCHAR(20) NOT NULL,
@@ -2486,12 +2486,18 @@ class TelegramTradingBot:
                     await conn.execute(
                         'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS group_name VARCHAR(30) DEFAULT \'\''
                     )
+                    await conn.execute(
+                        'ALTER TABLE active_trades ALTER COLUMN message_id TYPE VARCHAR(100)'
+                    )
+                    await conn.execute(
+                        'ALTER TABLE completed_trades ALTER COLUMN message_id TYPE VARCHAR(100)'
+                    )
                 except Exception:
                     pass
 
                 await conn.execute('''
                     CREATE TABLE IF NOT EXISTS completed_trades (
-                        message_id VARCHAR(50) PRIMARY KEY,
+                        message_id VARCHAR(100) PRIMARY KEY,
                         channel_id BIGINT NOT NULL,
                         guild_id BIGINT NOT NULL,
                         pair VARCHAR(20) NOT NULL,
