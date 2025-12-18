@@ -624,13 +624,18 @@ class TelegramTradingBot:
         if DEBUG_GROUP_ID:
             try:
                 topic_key = self._determine_debug_topic(message)
-                topic_id = DEBUG_TOPICS.get(topic_key, DEBUG_TOPICS["errors_diagnostics"])
+                topic_emoji = {
+                    "member_activity": "👤",
+                    "signals_tracking": "📊",
+                    "price_monitoring": "📈",
+                    "trade_management": "🔧",
+                    "errors_diagnostics": "⚠️"
+                }.get(topic_key, "📝")
                 
                 await self.app.get_chat(DEBUG_GROUP_ID)
                 await self.app.send_message(
                     DEBUG_GROUP_ID,
-                    f"**Bot Log:** {message}",
-                    message_thread_id=topic_id
+                    f"{topic_emoji} **[{topic_key.replace('_', ' ').title()}]** {message}"
                 )
             except Exception as e:
                 logger.error(f"Failed to send debug log: {e}")
