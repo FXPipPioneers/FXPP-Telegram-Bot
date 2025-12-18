@@ -74,13 +74,8 @@ VIP_GROUP_LINK = os.getenv("VIP_GROUP_LINK", "")
 VIP_TRIAL_INVITE_LINK = "https://t.me/+uM_Ug2wTKFpiMDVk"
 WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
 
-DEBUG_TOPICS = {
-    "member_activity": 125,
-    "signals_tracking": 98,
-    "price_monitoring": 114,
-    "trade_management": 115,
-    "errors_diagnostics": 120
-}
+# Pyrogram doesn't support Telegram topics - removed topic routing
+# All debug logs now go to DEBUG_GROUP_ID main message area with emoji prefixes for categorization
 
 if TELEGRAM_BOT_TOKEN:
     print(f"Telegram bot token loaded")
@@ -605,37 +600,29 @@ class TelegramTradingBot:
             logger.error(f"Error parsing signal message: {e}")
             return None
 
-    def _determine_debug_topic(self, message: str) -> str:
-        """Determine which debug topic to send the message to based on content"""
+    def _get_log_emoji(self, message: str) -> str:
+        """Determine emoji category for debug message"""
         msg_lower = message.lower()
         
         if any(keyword in msg_lower for keyword in ["joined", "left", "trial expired", "member", "new user"]):
-            return "member_activity"
+            return "👤"
         elif any(keyword in msg_lower for keyword in ["signal detected", "parsing signal", "api assignment", "tracking activated", "excluded"]):
-            return "signals_tracking"
+            return "📊"
         elif any(keyword in msg_lower for keyword in ["price tracking", "live price", "price retrieval", "offline", "tp/sl", "api limit", "price test"]):
-            return "price_monitoring"
+            return "📈"
         elif any(keyword in msg_lower for keyword in ["override", "trade removal", "manual override"]):
-            return "trade_management"
+            return "🔧"
         else:
-            return "errors_diagnostics"
+            return "⚠️"
 
     async def log_to_debug(self, message: str):
         if DEBUG_GROUP_ID:
             try:
-                topic_key = self._determine_debug_topic(message)
-                topic_emoji = {
-                    "member_activity": "👤",
-                    "signals_tracking": "📊",
-                    "price_monitoring": "📈",
-                    "trade_management": "🔧",
-                    "errors_diagnostics": "⚠️"
-                }.get(topic_key, "📝")
-                
+                emoji = self._get_log_emoji(message)
                 await self.app.get_chat(DEBUG_GROUP_ID)
                 await self.app.send_message(
                     DEBUG_GROUP_ID,
-                    f"{topic_emoji} **[{topic_key.replace('_', ' ').title()}]** {message}"
+                    f"{emoji} {message}"
                 )
             except Exception as e:
                 logger.error(f"Failed to send debug log: {e}")
