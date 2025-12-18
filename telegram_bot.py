@@ -71,9 +71,16 @@ VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
 DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID", "0"))
 FREE_GROUP_LINK = os.getenv("FREE_GROUP_LINK", "")
 VIP_GROUP_LINK = os.getenv("VIP_GROUP_LINK", "")
-VIP_TRIAL_INVITE_LINK = os.getenv("VIP_TRIAL_INVITE_LINK", "")
-WHOP_PURCHASE_LINK = os.getenv("WHOP_PURCHASE_LINK",
-                               "https://whop.com/gold-pioneer/gold-pioneer/")
+VIP_TRIAL_INVITE_LINK = "https://t.me/+uM_Ug2wTKFpiMDVk"
+WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
+
+DEBUG_TOPICS = {
+    "member_activity": 125,
+    "signals_tracking": 98,
+    "price_monitoring": 114,
+    "trade_management": 115,
+    "errors_diagnostics": 120
+}
 
 if TELEGRAM_BOT_TOKEN:
     print(f"Telegram bot token loaded")
@@ -83,8 +90,8 @@ if TELEGRAM_API_HASH:
     print(f"Telegram API Hash loaded")
 if BOT_OWNER_USER_ID:
     print(f"Bot owner ID loaded: {BOT_OWNER_USER_ID}")
-if VIP_TRIAL_INVITE_LINK:
-    print(f"VIP Trial invite link configured")
+print(f"VIP Trial invite link configured: https://t.me/+uM_Ug2wTKFpiMDVk")
+print(f"Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/")
 
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 
@@ -598,12 +605,33 @@ class TelegramTradingBot:
             logger.error(f"Error parsing signal message: {e}")
             return None
 
+    def _determine_debug_topic(self, message: str) -> str:
+        """Determine which debug topic to send the message to based on content"""
+        msg_lower = message.lower()
+        
+        if any(keyword in msg_lower for keyword in ["joined", "left", "trial expired", "member", "new user"]):
+            return "member_activity"
+        elif any(keyword in msg_lower for keyword in ["signal detected", "parsing signal", "api assignment", "tracking activated", "excluded"]):
+            return "signals_tracking"
+        elif any(keyword in msg_lower for keyword in ["price tracking", "live price", "price retrieval", "offline", "tp/sl", "api limit", "price test"]):
+            return "price_monitoring"
+        elif any(keyword in msg_lower for keyword in ["override", "trade removal", "manual override"]):
+            return "trade_management"
+        else:
+            return "errors_diagnostics"
+
     async def log_to_debug(self, message: str):
         if DEBUG_GROUP_ID:
             try:
+                topic_key = self._determine_debug_topic(message)
+                topic_id = DEBUG_TOPICS.get(topic_key, DEBUG_TOPICS["errors_diagnostics"])
+                
                 await self.app.get_chat(DEBUG_GROUP_ID)
-                await self.app.send_message(DEBUG_GROUP_ID,
-                                            f"**Bot Log:** {message}")
+                await self.app.send_message(
+                    DEBUG_GROUP_ID,
+                    f"**Bot Log:** {message}",
+                    message_thread_id=topic_id
+                )
             except Exception as e:
                 logger.error(f"Failed to send debug log: {e}")
         logger.info(message)
@@ -751,10 +779,10 @@ class TelegramTradingBot:
                 if FREE_GROUP_ID:
                     entry_data['groups'].append(FREE_GROUP_ID)
                 entry_data['track_price'] = True
-            elif group_choice == "debug":
-                entry_data['groups'] = [DEBUG_GROUP_ID
-                                        ] if DEBUG_GROUP_ID else []
+            elif group_choice == "manual":
+                entry_data['groups'] = [callback_query.message.chat.id]
                 entry_data['track_price'] = False
+                entry_data['manual_signal'] = True
 
             await self.show_confirmation(callback_query, entry_data)
 
@@ -782,8 +810,8 @@ class TelegramTradingBot:
                                       callback_data="entry_group_both")
              ],
              [
-                 InlineKeyboardButton("Debug Group (no tracking)",
-                                      callback_data="entry_group_debug")
+                 InlineKeyboardButton("Manual Signal (untracked)",
+                                      callback_data="entry_group_manual")
              ], [InlineKeyboardButton("Cancel",
                                       callback_data="entry_cancel")]])
 
@@ -805,8 +833,8 @@ class TelegramTradingBot:
             group_names.append("VIP Group")
         if FREE_GROUP_ID in entry_data['groups']:
             group_names.append("Free Group")
-        if DEBUG_GROUP_ID in entry_data['groups']:
-            group_names.append("Debug Group")
+        if entry_data.get('manual_signal'):
+            group_names.append("Manual Signal (Current Chat)")
         groups_text = ", ".join(group_names) if group_names else "None"
 
         pair = entry_data['pair']
@@ -898,10 +926,8 @@ class TelegramTradingBot:
                     group_name = "VIP"
                 elif channel_id == FREE_GROUP_ID:
                     group_name = "Free"
-                elif channel_id == DEBUG_GROUP_ID:
-                    group_name = "Debug"
                 else:
-                    group_name = "Unknown"
+                    group_name = "Manual Signal"
                 sent_messages.append({
                     'message': sent_msg,
                     'channel_id': channel_id,
@@ -1067,8 +1093,8 @@ class TelegramTradingBot:
                          ],
                          [
                              InlineKeyboardButton(
-                                 "Debug Group (no tracking)",
-                                 callback_data="entry_group_debug")
+                                 "Manual Signal (untracked)",
+                                 callback_data="entry_group_manual")
                          ],
                          [
                              InlineKeyboardButton("Cancel",
@@ -1772,7 +1798,7 @@ class TelegramTradingBot:
             f"**Want to try our VIP Group for FREE?**\n"
             f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
             f"**6+ high-quality signals per day** with automatic TP/SL calculations and live price tracking.\n\n"
-            f"**Activate your free trial here:**\n{VIP_TRIAL_INVITE_LINK}\n\n"
+            f"**Activate your free trial here:** https://t.me/+uM_Ug2wTKFpiMDVk\n\n"
             f"Good luck trading!")
 
         try:
@@ -1788,10 +1814,10 @@ class TelegramTradingBot:
         current_time = datetime.now(AMSTERDAM_TZ)
 
         used_trial_link = False
-        if invite_link and VIP_TRIAL_INVITE_LINK:
+        if invite_link:
             invite_link_str = invite_link.invite_link if hasattr(
                 invite_link, 'invite_link') else str(invite_link)
-            if VIP_TRIAL_INVITE_LINK in invite_link_str or invite_link_str in VIP_TRIAL_INVITE_LINK:
+            if "t.me/+uM_Ug2wTKFpiMDVk" in invite_link_str or invite_link_str in "https://t.me/+uM_Ug2wTKFpiMDVk":
                 used_trial_link = True
 
         if not used_trial_link:
@@ -1842,7 +1868,7 @@ class TelegramTradingBot:
                 await client.send_message(
                     user.id, f"**Trial Already Used**\n\n"
                     f"You have already used your 3-day free trial.\n\n"
-                    f"To continue accessing the VIP Group, please subscribe:\n{WHOP_PURCHASE_LINK}"
+                    f"To continue accessing the VIP Group, please subscribe:\nhttps://whop.com/gold-pioneer/gold-pioneer/"
                 )
             except Exception as e:
                 logger.error(f"Could not send DM to {user.first_name}: {e}")
@@ -1876,15 +1902,15 @@ class TelegramTradingBot:
 
         if is_weekend:
             welcome_msg = (
-                f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you free "
-                f"**access to our VIP Group for 3 trading days.** Since you joined during the weekend, "
+                f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
+                f"**access to the VIP Group for 3 trading days.** Since you joined during the weekend, "
                 f"your access will expire in 5 days (120 hours) to account for the 2 weekend days when the markets are closed. "
-                f"This way, you get the full 3 trading days of premium access. Good luck trading!"
+                f"This way, you get the full 3 trading days of VIP access. Good luck trading!"
             )
         else:
             welcome_msg = (
-                f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you free "
-                f"**access to our VIP Group for 3 days.** "
+                f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
+                f"**access to the VIP Group for 3 days.** "
                 f"Good luck trading!")
 
         try:
@@ -3170,7 +3196,7 @@ class TelegramTradingBot:
                     f"Hey! Your **3-day free access** to the VIP Group has unfortunately **ran out**. "
                     f"We truly hope you were able to benefit with us & we hope to see you back soon! "
                     f"For now, feel free to continue following our trade signals in the Free Group: https://t.me/fxpippioneers\n\n"
-                    f"**Want to rejoin the VIP group? You can regain access to our VIP group through this link:** {WHOP_PURCHASE_LINK}"
+                    f"**Want to rejoin the VIP Group? You can regain access through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
                 )
                 await self.app.send_message(int(member_id), expiry_msg)
             except Exception as e:
@@ -3243,31 +3269,24 @@ class TelegramTradingBot:
         try:
             if days == 3:
                 message = (
-                    f"Hey! It's been 3 days since your **3-day free trial for our VIP Group** ended. "
-                    f"We truly hope that you were able to catch good trades with us during that time.\n\n"
-                    f"As you've probably seen, our Free Group gets **1 free signal per day**, while our "
-                    f"**VIP members** receive **6+ high-quality signals per day**. That means that our "
-                    f"VIP Group offers way more chances to profit and grow consistently.\n\n"
+                    f"Hey! It's been 3 days since your **3-day free access to the VIP Group** ended. We truly hope that you were able to catch good trades with us during that time.\n\n"
+                    f"As you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\n"
                     f"We'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n"
-                    f"**Feel free to join us again through this link:** {WHOP_PURCHASE_LINK}"
+                    f"**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
                 )
             elif days == 7:
                 message = (
-                    f"It's been a week since your free trial for our VIP Group ended. Since then, our "
-                    f"**VIP members have been catching trade setups daily in the VIP Group**.\n\n"
-                    f"If you found value in just 3 days, imagine what results you could've been seeing by now with full access. "
-                    f"It's all about **consistency and staying connected to the right information**.\n\n"
+                    f"It's been a week since your VIP Group trial ended. Since then, our **VIP members have been catching trade setups daily in the VIP Group**.\n\n"
+                    f"If you found value in just 3 days, imagine what results you could've been seeing by now with full access. It's all about **consistency and staying connected to the right information**.\n\n"
                     f"We'd like to **personally invite you to rejoin the VIP Group** and get back into the rhythm.\n\n"
-                    f"**Feel free to join us again through this link:** {WHOP_PURCHASE_LINK}"
+                    f"**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
                 )
             elif days == 14:
                 message = (
-                    f"Hey! It's been two weeks since your free trial for our VIP Group ended. We hope you've stayed active since then.\n\n"
-                    f"If you've been trading solo or passively following the Free Group, you might be feeling the difference. "
-                    f"In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. "
-                    f"That edge can make all the difference over time.\n\n"
+                    f"Hey! It's been two weeks since your free access to the VIP Group ended. We hope you've stayed active since then.\n\n"
+                    f"If you've been trading solo or passively following the free channel, you might be feeling the difference. In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. That edge can make all the difference over time.\n\n"
                     f"We'd love to **invite you back into the VIP Group** and help you start compounding results again.\n\n"
-                    f"**Feel free to join us again through this link:** {WHOP_PURCHASE_LINK}"
+                    f"**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
                 )
             else:
                 return
@@ -3299,7 +3318,7 @@ class TelegramTradingBot:
                                     activation_message = (
                                         "Hey! The weekend is over, so the trading markets have been opened again. "
                                         "That means your 3-day welcome gift has officially started. "
-                                        "You now have full access to the premium channel. "
+                                        "You now have full access to the VIP Group. "
                                         "Let's make the most of it by securing some wins together!"
                                     )
                                     await self.app.send_message(
