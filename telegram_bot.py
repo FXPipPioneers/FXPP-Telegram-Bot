@@ -666,6 +666,65 @@ class TelegramTradingBot:
             return True
         return False
 
+    def calculate_trial_expiry_time(self, join_time: datetime) -> datetime:
+        """
+        Calculate trial expiry time to ensure exactly 3 trading days.
+        Trading days: Monday-Friday only
+        
+        Rules:
+        - Saturday/Sunday joiners: Always expire Wednesday 22:59 (regardless of join time)
+        - All other days: Expire exactly 3 trading days later at the same time they joined
+        
+        Examples:
+        - Saturday 13:37 join → expires Wednesday 22:59
+        - Sunday 03:00 join → expires Wednesday 22:59
+        - Friday 13:37 join → expires Tuesday 13:37 (5 calendar days: Fri→Sat→Sun→Mon→Tue)
+        - Wednesday 14:00 join → expires Friday 14:00 (Wed, Thu, Fri = 3 trading days)
+        """
+        if join_time.tzinfo is None:
+            join_time = AMSTERDAM_TZ.localize(join_time)
+        else:
+            join_time = join_time.astimezone(AMSTERDAM_TZ)
+        
+        weekday = join_time.weekday()  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+        
+        # If joined on Saturday or Sunday, always expire Wednesday 22:59
+        if weekday >= 5:  # 5=Saturday, 6=Sunday
+            current_date = join_time.date()
+            # Find the next Wednesday
+            while current_date.weekday() != 2:  # 2 = Wednesday
+                current_date += timedelta(days=1)
+            
+            expiry_time = AMSTERDAM_TZ.localize(
+                datetime(current_date.year, current_date.month, current_date.day, 22, 59, 0)
+            )
+            return expiry_time
+        
+        # For other weekdays, count exactly 3 trading days from join time
+        trading_days_counted = 0
+        current_date = join_time.date()
+        
+        while True:
+            day_weekday = current_date.weekday()
+            
+            # Only count weekdays (Mon-Fri)
+            if day_weekday < 5:
+                trading_days_counted += 1
+                
+                # If we've counted 3 trading days, set expiry at the same time as join
+                if trading_days_counted == 3:
+                    expiry_datetime = datetime(
+                        current_date.year, 
+                        current_date.month, 
+                        current_date.day,
+                        join_time.hour,
+                        join_time.minute,
+                        join_time.second
+                    )
+                    return AMSTERDAM_TZ.localize(expiry_datetime)
+            
+            current_date += timedelta(days=1)
+
     def calculate_tp_sl_levels(self, entry_price: float, pair: str,
                                action: str) -> dict:
         if pair.upper() in PAIR_CONFIG:
@@ -1795,8 +1854,8 @@ class TelegramTradingBot:
             status = (
                 f"**Trial System Status**\n\n"
                 f"**Status:** {'Enabled' if AUTO_ROLE_CONFIG['enabled'] else 'Disabled'}\n"
-                f"**Duration:** {AUTO_ROLE_CONFIG['duration_hours']} hours (3 days)\n"
-                f"**Weekend Duration:** 120 hours (5 days)\n\n"
+                f"**Duration:** Exactly 3 trading days (Mon-Fri only)\n"
+                f"**Expiry Time:** 22:59 on the 3rd trading day\n\n"
                 f"**Active Trials:** {active_count}\n"
                 f"**Anti-abuse Records:** {history_count}\n")
             await callback_query.message.edit_text(status)
@@ -1945,15 +2004,28 @@ class TelegramTradingBot:
 
         used_trial_link = False
         if invite_link:
-            invite_link_str = invite_link.invite_link if hasattr(
-                invite_link, 'invite_link') else str(invite_link)
+            # Extract invite link string from object
+            invite_link_str = ""
+            if hasattr(invite_link, 'invite_link'):
+                invite_link_str = str(invite_link.invite_link)
+            elif hasattr(invite_link, 'link'):
+                invite_link_str = str(invite_link.link)
+            else:
+                invite_link_str = str(invite_link)
+            
+            # Normalize for comparison
+            invite_link_str = invite_link_str.strip().lower()
+            trial_link_hash = "um_ug2wtkfpimdzk"
+            
             await self.log_to_debug(
-                f"DEBUG: VIP join detected - invite_link_str = '{invite_link_str}'"
+                f"DEBUG: VIP join detected - invite_link_str = '{invite_link_str}' | Checking against trial hash: {trial_link_hash}"
             )
-            if invite_link_str and ("t.me/+uM_Ug2wTKFpiMDVk" in invite_link_str or "+uM_Ug2wTKFpiMDVk" in invite_link_str):
+            
+            # Check if this is the trial link
+            if invite_link_str and trial_link_hash in invite_link_str:
                 used_trial_link = True
                 await self.log_to_debug(
-                    f"DEBUG: Trial link DETECTED for {user.first_name} (ID: {user.id})"
+                    f"✅ Trial link DETECTED for {user.first_name} (ID: {user.id})"
                 )
         else:
             await self.log_to_debug(
@@ -2021,18 +2093,16 @@ class TelegramTradingBot:
                 logger.error(f"Error kicking user {user.first_name}: {e}")
             return
 
+        # Calculate expiry time to ensure exactly 3 trading days
+        expiry_time = self.calculate_trial_expiry_time(current_time)
+        
+        # Determine if joined during weekend for tracking
         is_weekend = self.is_weekend_time(current_time)
-        weekday = current_time.weekday(
-        )  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
-        is_wed_or_thu = weekday in [2, 3]  # Wednesday or Thursday
-        needs_extra_time = is_weekend or is_wed_or_thu
-        duration_hours = 120 if needs_extra_time else 72
-        expiry_time = current_time + timedelta(hours=duration_hours)
 
         AUTO_ROLE_CONFIG['active_members'][user_id_str] = {
             'joined_at': current_time.isoformat(),
             'expiry_time': expiry_time.isoformat(),
-            'weekend_delayed': needs_extra_time,
+            'weekend_delayed': is_weekend,
             'chat_id': VIP_GROUP_ID
         }
 
@@ -2044,18 +2114,12 @@ class TelegramTradingBot:
 
         await self.save_auto_role_config()
 
-        if needs_extra_time:
-            welcome_msg = (
-                f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
-                f"**access to the VIP Group for 3 trading days.** Since you joined during a time that includes the weekend, "
-                f"your access will expire in 5 days (120 hours) to account for the weekend days when the markets are closed. "
-                f"This way, you get the full 3 trading days of VIP access. Good luck trading!"
-            )
-        else:
-            welcome_msg = (
-                f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
-                f"**access to the VIP Group for 3 days.** "
-                f"Good luck trading!")
+        welcome_msg = (
+            f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
+            f"**access to the VIP Group for 3 trading days.** "
+            f"Your access will expire on {expiry_time.strftime('%A at %H:%M')}. "
+            f"Good luck trading!"
+        )
 
         try:
             await client.send_message(user.id, welcome_msg)
