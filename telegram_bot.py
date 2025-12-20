@@ -350,6 +350,10 @@ class TelegramTradingBot:
         async def timed_auto_role_command(client, message: Message):
             await self.handle_timed_auto_role(client, message)
 
+        @self.app.on_message(filters.command("retracttrial"))
+        async def retract_trial_command(client, message: Message):
+            await self.handle_retract_trial(client, message)
+
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
             await self.process_join_request(client, join_request)
@@ -379,14 +383,14 @@ class TelegramTradingBot:
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "freetrialusers"
+                "dbstatus", "dmstatus", "freetrialusers", "retracttrial"
             ]))
         async def text_input_handler(client, message: Message):
             await self.handle_text_input(client, message)
 
         @self.app.on_message(filters.group & filters.text & ~filters.command([
             "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
-            "dmstatus", "freetrialusers"
+            "dmstatus", "freetrialusers", "retracttrial"
         ]))
         async def group_message_handler(client, message: Message):
             await self.handle_group_message(client, message)
@@ -1827,6 +1831,49 @@ class TelegramTradingBot:
             await callback_query.message.edit_text(response)
 
         await callback_query.answer()
+
+    async def handle_retract_trial(self, client: Client, message: Message):
+        if not await self.is_owner(message.from_user.id):
+            return
+
+        try:
+            parts = message.text.split()
+            if len(parts) < 3:
+                await message.reply(
+                    "Usage: /retracttrial <user_id> <minutes>\n\n"
+                    "Example: /retracttrial 123456789 295")
+                return
+
+            user_id = parts[1]
+            minutes = int(parts[2])
+
+            if user_id not in AUTO_ROLE_CONFIG['active_members']:
+                await message.reply(f"User {user_id} not found in active trials.")
+                return
+
+            member_data = AUTO_ROLE_CONFIG['active_members'][user_id]
+            old_expiry = datetime.fromisoformat(member_data['expiry_time'])
+            if old_expiry.tzinfo is None:
+                old_expiry = AMSTERDAM_TZ.localize(old_expiry)
+
+            new_expiry = old_expiry - timedelta(minutes=minutes)
+            member_data['expiry_time'] = new_expiry.isoformat()
+
+            if self.db_pool:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE active_members SET expiry_time = $1 WHERE member_id = $2",
+                        new_expiry, user_id)
+
+            await self.save_auto_role_config()
+            await message.reply(
+                f"✅ Retracted {minutes} minutes from user {user_id}\n"
+                f"New expiry: {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        except ValueError:
+            await message.reply("Invalid format. Minutes must be a number.")
+        except Exception as e:
+            await message.reply(f"Error: {str(e)}")
 
     async def process_join_request(self, client: Client,
                                    join_request: ChatJoinRequest):
