@@ -405,11 +405,10 @@ class TelegramTradingBot:
 
         @self.app.on_message(filters.group & filters.service)
         async def delete_service_messages(client, message: Message):
-            """Auto-delete join/leave service messages from VIP and FREE groups"""
+            """Auto-delete all service messages from VIP and FREE groups"""
             if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
                 try:
-                    if message.new_chat_members or message.left_chat_member:
-                        await message.delete()
+                    await message.delete()
                 except Exception as e:
                     logger.debug(f"Could not delete service message: {e}")
 
@@ -2024,7 +2023,8 @@ class TelegramTradingBot:
 
         elif data == "tar_retract":
             if not AUTO_ROLE_CONFIG['active_members']:
-                await callback_query.message.edit_text("No active trial members found.")
+                await callback_query.message.edit_text(
+                    "No active trial members found.")
                 await callback_query.answer()
                 return
 
@@ -2066,11 +2066,6 @@ class TelegramTradingBot:
                 reply_markup=keyboard)
 
         elif data == "tar_clear":
-            if not AUTO_ROLE_CONFIG['active_members']:
-                await callback_query.message.edit_text("No active trial members found.")
-                await callback_query.answer()
-                return
-
             if not hasattr(self, 'cleartrial_mappings'):
                 self.cleartrial_mappings = {}
 
@@ -2078,14 +2073,16 @@ class TelegramTradingBot:
             user_mapping = {}
             buttons = []
 
-            for idx, (user_id_str, member_data) in enumerate(
-                    list(AUTO_ROLE_CONFIG['active_members'].items())[:20]):
-                user_mapping[str(idx)] = user_id_str
-                buttons.append([
-                    InlineKeyboardButton(
-                        f"User {user_id_str}",
-                        callback_data=f"clrtrl_{menu_id}_select_{idx}")
-                ])
+            # Add active members if they exist
+            if AUTO_ROLE_CONFIG['active_members']:
+                for idx, (user_id_str, member_data) in enumerate(
+                        list(AUTO_ROLE_CONFIG['active_members'].items())[:20]):
+                    user_mapping[str(idx)] = user_id_str
+                    buttons.append([
+                        InlineKeyboardButton(
+                            f"User {user_id_str}",
+                            callback_data=f"clrtrl_{menu_id}_select_{idx}")
+                    ])
 
             buttons.append([
                 InlineKeyboardButton(
@@ -2099,9 +2096,15 @@ class TelegramTradingBot:
 
             self.cleartrial_mappings[menu_id] = user_mapping
             keyboard = InlineKeyboardMarkup(buttons)
+            
+            status_text = "**Clear Trial History**\n\n"
+            if AUTO_ROLE_CONFIG['active_members']:
+                status_text += "Select a user to remove from trial tracking, or enter a custom member ID:"
+            else:
+                status_text += "No active trial members. Enter a custom member ID to clear history:"
+            
             await callback_query.message.edit_text(
-                "**Clear Trial History**\n\n"
-                "Select a user to remove from trial tracking, or enter a custom member ID:",
+                status_text,
                 reply_markup=keyboard)
 
         await callback_query.answer()
