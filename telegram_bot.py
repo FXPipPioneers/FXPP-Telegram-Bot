@@ -1947,8 +1947,18 @@ class TelegramTradingBot:
         if invite_link:
             invite_link_str = invite_link.invite_link if hasattr(
                 invite_link, 'invite_link') else str(invite_link)
-            if "t.me/+uM_Ug2wTKFpiMDVk" in invite_link_str or invite_link_str in "https://t.me/+uM_Ug2wTKFpiMDVk":
+            await self.log_to_debug(
+                f"DEBUG: VIP join detected - invite_link_str = '{invite_link_str}'"
+            )
+            if invite_link_str and ("t.me/+uM_Ug2wTKFpiMDVk" in invite_link_str or "+uM_Ug2wTKFpiMDVk" in invite_link_str):
                 used_trial_link = True
+                await self.log_to_debug(
+                    f"DEBUG: Trial link DETECTED for {user.first_name} (ID: {user.id})"
+                )
+        else:
+            await self.log_to_debug(
+                f"DEBUG: {user.first_name} (ID: {user.id}) joined with NO invite_link data"
+            )
 
         if not used_trial_link:
             await self.log_to_debug(
