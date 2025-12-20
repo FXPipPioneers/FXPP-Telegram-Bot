@@ -75,17 +75,21 @@ VIP_TRIAL_INVITE_LINK = "https://t.me/+uM_Ug2wTKFpiMDVk"
 WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
 
 if TELEGRAM_BOT_TOKEN:
-    print(f"Telegram bot token loaded")
+    print(f"✅ Telegram bot token loaded")
 if TELEGRAM_API_ID:
-    print(f"Telegram API ID loaded")
+    print(f"✅ Telegram API ID loaded")
 if TELEGRAM_API_HASH:
-    print(f"Telegram API Hash loaded")
-if BOT_OWNER_USER_ID:
-    print(f"Bot owner ID loaded: {BOT_OWNER_USER_ID}")
-print(f"VIP Trial invite link configured: https://t.me/+uM_Ug2wTKFpiMDVk")
-print(
-    f"Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/"
-)
+    print(f"✅ Telegram API Hash loaded")
+
+# Always print owner ID for debugging
+print(f"🔑 BOT_OWNER_USER_ID = {BOT_OWNER_USER_ID}")
+if BOT_OWNER_USER_ID == 0:
+    print(f"⚠️  WARNING: BOT_OWNER_USER_ID not set! Owner commands will not work. Check Render environment variables.")
+else:
+    print(f"✅ Bot owner commands enabled for user {BOT_OWNER_USER_ID}")
+
+print(f"🔗 VIP Trial invite link configured: https://t.me/+uM_Ug2wTKFpiMDVk")
+print(f"🔗 Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/")
 
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 
@@ -317,6 +321,7 @@ class TelegramTradingBot:
         self.awaiting_price_input = {}
         self.awaiting_custom_pair = {}
         self.override_trade_mappings = {}  # menu_id -> {idx: message_id}
+        self.trial_pending_approvals = set()  # Track user IDs approved for trial
 
         self._register_handlers()
 
@@ -400,7 +405,15 @@ class TelegramTradingBot:
             await self.handle_group_message(client, message)
 
     async def is_owner(self, user_id: int) -> bool:
-        return user_id == BOT_OWNER_USER_ID
+        """Check if user is the bot owner"""
+        if BOT_OWNER_USER_ID == 0:
+            # If owner ID not set, no one is owner
+            return False
+        is_owner = user_id == BOT_OWNER_USER_ID
+        if not is_owner and BOT_OWNER_USER_ID > 0:
+            # Log failed owner checks for debugging
+            logger.debug(f"Owner check failed: user {user_id} != owner {BOT_OWNER_USER_ID}")
+        return is_owner
 
     async def handle_group_message(self, client: Client, message: Message):
         """Handle messages in groups - detect manual signals from owner"""
@@ -1897,6 +1910,7 @@ class TelegramTradingBot:
 
     async def handle_retract_trial(self, client: Client, message: Message):
         if not await self.is_owner(message.from_user.id):
+            await message.reply("❌ This command can only be used by the bot owner.")
             return
 
         try:
@@ -1941,6 +1955,7 @@ class TelegramTradingBot:
     async def handle_clear_member(self, client: Client, message: Message):
         """Remove a user from all trial tracking tables (active_members, role_history, dm_schedule, weekend_pending)"""
         if not await self.is_owner(message.from_user.id):
+            await message.reply("❌ This command can only be used by the bot owner.")
             return
 
         try:
@@ -1978,9 +1993,12 @@ class TelegramTradingBot:
             return
 
         try:
+            user_id = join_request.from_user.id
+            # Track this user as trial approval (they're joining via trial link with approval)
+            self.trial_pending_approvals.add(user_id)
             await join_request.approve()
             await self.log_to_debug(
-                f"Auto-approved join request from {join_request.from_user.first_name} - member update handler will process trial logic"
+                f"Auto-approved trial join from {join_request.from_user.first_name} (ID: {user_id})"
             )
         except Exception as e:
             logger.error(f"Error auto-approving join request: {e}")
@@ -2038,32 +2056,17 @@ class TelegramTradingBot:
 
     async def handle_vip_group_join(self, client: Client, user, invite_link):
         """
-        Handle VIP group joins. Only register trial users (those joining via trial link).
-        Paid members joining via main Whop link are not registered/tracked.
+        Handle VIP group joins. Register trial users (those with approved join requests).
+        Paid members joining via main link are not registered/tracked.
         """
         user_id_str = str(user.id)
         current_time = datetime.now(AMSTERDAM_TZ)
 
-        # Determine if this is a trial user or paid member
-        is_trial_user = False
-        trial_link_indicator = "um_ug2wtkfpimdvk"  # Trial link hash (lowercase from https://t.me/+uM_Ug2wTKFpiMDVk)
+        # Determine if this is a trial user (they were approved for trial access)
+        is_trial_user = user.id in self.trial_pending_approvals
         
-        if invite_link:
-            # Extract invite link safely
-            invite_link_str = ""
-            try:
-                if hasattr(invite_link, 'invite_link'):
-                    invite_link_str = str(invite_link.invite_link).lower()
-                elif hasattr(invite_link, 'link'):
-                    invite_link_str = str(invite_link.link).lower()
-                else:
-                    invite_link_str = str(invite_link).lower()
-            except:
-                pass
-            
-            # Check if trial link
-            if trial_link_indicator in invite_link_str:
-                is_trial_user = True
+        # Remove from pending so we don't register twice
+        self.trial_pending_approvals.discard(user.id)
         
         # If not trial user, don't register - they're paying members
         if not is_trial_user:
