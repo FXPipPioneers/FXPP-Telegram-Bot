@@ -558,7 +558,7 @@ class TelegramTradingBot:
                 'breakeven_active':
                 False,
                 'created_at':
-                datetime.now(AMSTERDAM_TZ).isoformat(),
+                datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ).isoformat(),
                 'group_name':
                 group_name,
                 'channel_id':
@@ -1099,7 +1099,7 @@ class TelegramTradingBot:
                     'tp_hits': [],
                     'manual_overrides': [],
                     'breakeven_active': False,
-                    'created_at': datetime.now(AMSTERDAM_TZ).isoformat(),
+                    'created_at': datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ).isoformat(),
                     'group_name': group_name,
                     'channel_id': channel_id
                 }
@@ -1895,7 +1895,7 @@ class TelegramTradingBot:
                 return
 
             response = "**Active Trial Members**\n\n"
-            current_time = datetime.now(AMSTERDAM_TZ)
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
             for member_id, data_item in list(
                     AUTO_ROLE_CONFIG['active_members'].items())[:20]:
@@ -1944,7 +1944,7 @@ class TelegramTradingBot:
             if expiry.tzinfo is None:
                 expiry = AMSTERDAM_TZ.localize(expiry)
 
-            hours_left = max(0, (expiry - datetime.now(AMSTERDAM_TZ)).total_seconds() / 3600)
+            hours_left = max(0, (expiry - datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)).total_seconds() / 3600)
 
             buttons.append([
                 InlineKeyboardButton(
@@ -2220,7 +2220,7 @@ class TelegramTradingBot:
                     if expiry.tzinfo is None:
                         expiry = AMSTERDAM_TZ.localize(expiry)
 
-                    hours_left = max(0, (expiry - datetime.now(AMSTERDAM_TZ)).
+                    hours_left = max(0, (expiry - datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)).
                                     total_seconds() / 3600)
 
                     buttons.append([
@@ -2383,7 +2383,7 @@ class TelegramTradingBot:
         Paid members joining via main link are not registered/tracked.
         """
         user_id_str = str(user.id)
-        current_time = datetime.now(AMSTERDAM_TZ)
+        current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
         # Determine if this is a trial user (they were approved for trial access)
         is_trial_user = user.id in self.trial_pending_approvals
@@ -3520,7 +3520,7 @@ class TelegramTradingBot:
                     created_at = datetime.fromisoformat(
                         created_at.replace('Z', '+00:00'))
                 if created_at is None:
-                    created_at = datetime.now(AMSTERDAM_TZ)
+                    created_at = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
                 await conn.execute(
                     '''
@@ -3595,7 +3595,7 @@ class TelegramTradingBot:
             await self.log_to_debug(f"Error removing trade {message_id}: {e}")
 
     def is_weekend_market_closed(self) -> bool:
-        amsterdam_now = datetime.now(AMSTERDAM_TZ)
+        amsterdam_now = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
         weekday = amsterdam_now.weekday()
         hour = amsterdam_now.hour
         minute = amsterdam_now.minute
@@ -3731,7 +3731,7 @@ class TelegramTradingBot:
 
         while self.running:
             try:
-                current_time = datetime.now(AMSTERDAM_TZ)
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 expired_members = []
 
                 for member_id, data in list(
@@ -3764,7 +3764,7 @@ class TelegramTradingBot:
             except Exception as e:
                 logger.error(f"Error kicking member {member_id}: {e}")
 
-            current_time = datetime.now(AMSTERDAM_TZ)
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
             if member_id in AUTO_ROLE_CONFIG['role_history']:
                 AUTO_ROLE_CONFIG['role_history'][member_id][
@@ -3801,7 +3801,7 @@ class TelegramTradingBot:
 
         while self.running:
             try:
-                current_time = datetime.now(AMSTERDAM_TZ)
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
                 for member_id, data in list(
                         AUTO_ROLE_CONFIG['dm_schedule'].items()):
@@ -3891,7 +3891,7 @@ class TelegramTradingBot:
 
         while self.running:
             try:
-                current_time = datetime.now(AMSTERDAM_TZ)
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 weekday = current_time.weekday()
                 hour = current_time.hour
 
@@ -3968,7 +3968,7 @@ class TelegramTradingBot:
             try:
                 if self.db_pool:
                     async with self.db_pool.acquire() as conn:
-                        current_time = datetime.now(AMSTERDAM_TZ)
+                        current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                         await conn.execute(
                             '''
                             INSERT INTO bot_status (id, last_online, heartbeat_time)
