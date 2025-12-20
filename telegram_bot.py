@@ -74,7 +74,6 @@ VIP_GROUP_LINK = os.getenv("VIP_GROUP_LINK", "")
 VIP_TRIAL_INVITE_LINK = "https://t.me/+uM_Ug2wTKFpiMDVk"
 WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
 
-
 if TELEGRAM_BOT_TOKEN:
     print(f"Telegram bot token loaded")
 if TELEGRAM_API_ID:
@@ -84,7 +83,9 @@ if TELEGRAM_API_HASH:
 if BOT_OWNER_USER_ID:
     print(f"Bot owner ID loaded: {BOT_OWNER_USER_ID}")
 print(f"VIP Trial invite link configured: https://t.me/+uM_Ug2wTKFpiMDVk")
-print(f"Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/")
+print(
+    f"Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/"
+)
 
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 
@@ -383,11 +384,10 @@ class TelegramTradingBot:
         async def text_input_handler(client, message: Message):
             await self.handle_text_input(client, message)
 
-        @self.app.on_message(
-            filters.group & filters.text & ~filters.command([
-                "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "freetrialusers"
-            ]))
+        @self.app.on_message(filters.group & filters.text & ~filters.command([
+            "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
+            "dmstatus", "freetrialusers"
+        ]))
         async def group_message_handler(client, message: Message):
             await self.handle_group_message(client, message)
 
@@ -435,8 +435,7 @@ class TelegramTradingBot:
                 return
 
             await self.log_to_debug(
-                f"Parsed manual signal: {pair} {action} @ {entry_price}"
-            )
+                f"Parsed manual signal: {pair} {action} @ {entry_price}")
 
             if pair in EXCLUDED_FROM_TRACKING:
                 await self.log_to_debug(
@@ -448,7 +447,8 @@ class TelegramTradingBot:
 
             live_price = await self.get_live_price(pair)
             if live_price:
-                live_tracking_levels = self.calculate_tp_sl_levels(live_price, pair, action)
+                live_tracking_levels = self.calculate_tp_sl_levels(
+                    live_price, pair, action)
                 await self.log_to_debug(
                     f"Manual signal tracking setup for {pair}:\n"
                     f"- User entered price: {entry_price}\n"
@@ -456,10 +456,10 @@ class TelegramTradingBot:
                     f"- Tracking TP1: {live_tracking_levels['tp1']:.5f}\n"
                     f"- Tracking TP2: {live_tracking_levels['tp2']:.5f}\n"
                     f"- Tracking TP3: {live_tracking_levels['tp3']:.5f}\n"
-                    f"- Tracking SL: {live_tracking_levels['sl']:.5f}"
-                )
+                    f"- Tracking SL: {live_tracking_levels['sl']:.5f}")
             else:
-                live_tracking_levels = self.calculate_tp_sl_levels(entry_price, pair, action)
+                live_tracking_levels = self.calculate_tp_sl_levels(
+                    entry_price, pair, action)
                 live_price = entry_price
                 await self.log_to_debug(
                     f"Could not get live price for {pair}, using entered price for tracking"
@@ -473,50 +473,78 @@ class TelegramTradingBot:
                 parsed_entry_type = f"{action.lower()} execution"
 
             full_trade_data = {
-                'message_id': str(message.id),
-                'trade_key': trade_key,
-                'chat_id': message.chat.id,
-                'pair': pair,
-                'action': action,
-                'entry_type': parsed_entry_type,
-                'entry_price': float(entry_price),
-                'tp1_price': float(live_tracking_levels['tp1']),
-                'tp2_price': float(live_tracking_levels['tp2']),
-                'tp3_price': float(live_tracking_levels['tp3']),
-                'sl_price': float(live_tracking_levels['sl']),
-                'entry': float(live_price),
-                'tp1': float(live_tracking_levels['tp1']),
-                'tp2': float(live_tracking_levels['tp2']),
-                'tp3': float(live_tracking_levels['tp3']),
-                'sl': float(live_tracking_levels['sl']),
-                'telegram_entry': float(entry_price),
-                'telegram_tp1': float(trade_data.get('tp1') or live_tracking_levels['tp1']),
-                'telegram_tp2': float(trade_data.get('tp2') or live_tracking_levels['tp2']),
-                'telegram_tp3': float(trade_data.get('tp3') or live_tracking_levels['tp3']),
-                'telegram_sl': float(trade_data.get('sl') or live_tracking_levels['sl']),
-                'live_entry': float(live_price),
-                'assigned_api': assigned_api,
-                'status': trade_data.get('status', 'active'),
+                'message_id':
+                str(message.id),
+                'trade_key':
+                trade_key,
+                'chat_id':
+                message.chat.id,
+                'pair':
+                pair,
+                'action':
+                action,
+                'entry_type':
+                parsed_entry_type,
+                'entry_price':
+                float(entry_price),
+                'tp1_price':
+                float(live_tracking_levels['tp1']),
+                'tp2_price':
+                float(live_tracking_levels['tp2']),
+                'tp3_price':
+                float(live_tracking_levels['tp3']),
+                'sl_price':
+                float(live_tracking_levels['sl']),
+                'entry':
+                float(live_price),
+                'tp1':
+                float(live_tracking_levels['tp1']),
+                'tp2':
+                float(live_tracking_levels['tp2']),
+                'tp3':
+                float(live_tracking_levels['tp3']),
+                'sl':
+                float(live_tracking_levels['sl']),
+                'telegram_entry':
+                float(entry_price),
+                'telegram_tp1':
+                float(trade_data.get('tp1') or live_tracking_levels['tp1']),
+                'telegram_tp2':
+                float(trade_data.get('tp2') or live_tracking_levels['tp2']),
+                'telegram_tp3':
+                float(trade_data.get('tp3') or live_tracking_levels['tp3']),
+                'telegram_sl':
+                float(trade_data.get('sl') or live_tracking_levels['sl']),
+                'live_entry':
+                float(live_price),
+                'assigned_api':
+                assigned_api,
+                'status':
+                trade_data.get('status', 'active'),
                 'tp_hits': [],
                 'manual_overrides': [],
-                'breakeven_active': False,
-                'created_at': datetime.now(AMSTERDAM_TZ).isoformat(),
-                'group_name': group_name,
-                'channel_id': message.chat.id
+                'breakeven_active':
+                False,
+                'created_at':
+                datetime.now(AMSTERDAM_TZ).isoformat(),
+                'group_name':
+                group_name,
+                'channel_id':
+                message.chat.id
             }
 
             PRICE_TRACKING_CONFIG['active_trades'][trade_key] = full_trade_data
             await self.save_trade_to_db(trade_key, full_trade_data)
             asyncio.create_task(
-                self.check_single_trade_immediately(trade_key, full_trade_data))
+                self.check_single_trade_immediately(trade_key,
+                                                    full_trade_data))
 
             await self.log_to_debug(
                 f"Manual signal tracking activated: {pair} {action} @ {live_price} in {group_name} group"
             )
 
             logger.info(
-                f"NEW MANUAL SIGNAL DETECTED: {pair} {action} @ {live_price}"
-            )
+                f"NEW MANUAL SIGNAL DETECTED: {pair} {action} @ {live_price}")
 
         except Exception as e:
             import traceback
@@ -543,13 +571,17 @@ class TelegramTradingBot:
                 "entry_type": None
             }
 
-            pair_match = re.search(r'Trade Signal For:\s*\*?\*?([A-Z0-9/]+)\*?\*?', content, re.IGNORECASE)
+            pair_match = re.search(
+                r'Trade Signal For:\s*\*?\*?([A-Z0-9/]+)\*?\*?', content,
+                re.IGNORECASE)
             if pair_match:
                 raw_pair = pair_match.group(1).strip()
-                trade_data["pair"] = raw_pair.upper().replace("/", "").replace("-", "").replace("_", "")
+                trade_data["pair"] = raw_pair.upper().replace("/", "").replace(
+                    "-", "").replace("_", "")
 
             entry_type_match = re.search(
-                r'Entry Type:\s*\*?\*?(Buy|Sell)\s+(execution|limit)\*?\*?', content, re.IGNORECASE)
+                r'Entry Type:\s*\*?\*?(Buy|Sell)\s+(execution|limit)\*?\*?',
+                content, re.IGNORECASE)
             if entry_type_match:
                 action = entry_type_match.group(1).upper()
                 order_type = entry_type_match.group(2).lower()
@@ -565,31 +597,38 @@ class TelegramTradingBot:
                 elif "SELL" in content.upper():
                     trade_data["action"] = "SELL"
 
-            entry_match = re.search(r'Entry Price:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            entry_match = re.search(r'Entry Price:\s*\$?([0-9]+(?:\.[0-9]+)?)',
+                                    content, re.IGNORECASE)
             if entry_match:
                 trade_data["entry"] = float(entry_match.group(1))
             else:
-                entry_match = re.search(r'Entry[:\s]*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+                entry_match = re.search(r'Entry[:\s]*\$?([0-9]+(?:\.[0-9]+)?)',
+                                        content, re.IGNORECASE)
                 if entry_match:
                     trade_data["entry"] = float(entry_match.group(1))
 
-            tp1_match = re.search(r'Take Profit 1:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            tp1_match = re.search(r'Take Profit 1:\s*\$?([0-9]+(?:\.[0-9]+)?)',
+                                  content, re.IGNORECASE)
             if tp1_match:
                 trade_data["tp1"] = float(tp1_match.group(1))
 
-            tp2_match = re.search(r'Take Profit 2:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            tp2_match = re.search(r'Take Profit 2:\s*\$?([0-9]+(?:\.[0-9]+)?)',
+                                  content, re.IGNORECASE)
             if tp2_match:
                 trade_data["tp2"] = float(tp2_match.group(1))
 
-            tp3_match = re.search(r'Take Profit 3:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            tp3_match = re.search(r'Take Profit 3:\s*\$?([0-9]+(?:\.[0-9]+)?)',
+                                  content, re.IGNORECASE)
             if tp3_match:
                 trade_data["tp3"] = float(tp3_match.group(1))
 
-            sl_match = re.search(r'Stop Loss:\s*\$?([0-9]+(?:\.[0-9]+)?)', content, re.IGNORECASE)
+            sl_match = re.search(r'Stop Loss:\s*\$?([0-9]+(?:\.[0-9]+)?)',
+                                 content, re.IGNORECASE)
             if sl_match:
                 trade_data["sl"] = float(sl_match.group(1))
 
-            if trade_data["pair"] and trade_data["action"] and trade_data["entry"]:
+            if trade_data["pair"] and trade_data["action"] and trade_data[
+                    "entry"]:
                 return trade_data
             else:
                 return None
@@ -601,7 +640,8 @@ class TelegramTradingBot:
     async def log_to_debug(self, message: str):
         if DEBUG_GROUP_ID:
             try:
-                await self.app.send_message(DEBUG_GROUP_ID, f"**Bot Log:** {message}")
+                await self.app.send_message(DEBUG_GROUP_ID,
+                                            f"**Bot Log:** {message}")
             except Exception as e:
                 logger.error(f"Failed to send debug log: {e}")
         logger.info(message)
@@ -917,7 +957,8 @@ class TelegramTradingBot:
 
             live_price = await self.get_live_price(pair)
             if live_price:
-                live_tracking_levels = self.calculate_tp_sl_levels(live_price, pair, action)
+                live_tracking_levels = self.calculate_tp_sl_levels(
+                    live_price, pair, action)
                 await self.log_to_debug(
                     f"Price tracking setup for {pair}:\n"
                     f"- User entered price: {entry_price}\n"
@@ -925,8 +966,7 @@ class TelegramTradingBot:
                     f"- Tracking TP1: {live_tracking_levels['tp1']:.5f}\n"
                     f"- Tracking TP2: {live_tracking_levels['tp2']:.5f}\n"
                     f"- Tracking TP3: {live_tracking_levels['tp3']:.5f}\n"
-                    f"- Tracking SL: {live_tracking_levels['sl']:.5f}"
-                )
+                    f"- Tracking SL: {live_tracking_levels['sl']:.5f}")
             else:
                 live_tracking_levels = levels
                 live_price = entry_price
@@ -1204,7 +1244,8 @@ class TelegramTradingBot:
 
         menu_id = str(message.id)[-8:]
         trade_mapping = {}
-        self.pending_multi_select = self.pending_multi_select if hasattr(self, 'pending_multi_select') else {}
+        self.pending_multi_select = self.pending_multi_select if hasattr(
+            self, 'pending_multi_select') else {}
         self.pending_multi_select[menu_id] = []
         buttons = []
 
@@ -1220,8 +1261,9 @@ class TelegramTradingBot:
             trade_mapping[str(idx)] = msg_id
 
             buttons.append([
-                InlineKeyboardButton(f"☐ {pair} - {action}{tp_status}{group_label}",
-                                     callback_data=f"ovr_{menu_id}_sel_{idx}")
+                InlineKeyboardButton(
+                    f"☐ {pair} - {action}{tp_status}{group_label}",
+                    callback_data=f"ovr_{menu_id}_sel_{idx}")
             ])
 
         self.override_trade_mappings[menu_id] = trade_mapping
@@ -1279,7 +1321,8 @@ class TelegramTradingBot:
         if action_type == "sel":
             idx = parts[3] if len(parts) > 3 else None
             if not idx:
-                await callback_query.answer("Invalid selection.", show_alert=True)
+                await callback_query.answer("Invalid selection.",
+                                            show_alert=True)
                 return
 
             selected = self.pending_multi_select.get(menu_id, [])
@@ -1287,14 +1330,16 @@ class TelegramTradingBot:
                 selected.remove(idx)
             else:
                 if len(selected) >= 5:
-                    await callback_query.answer("Maximum 5 trades can be selected.", show_alert=True)
+                    await callback_query.answer(
+                        "Maximum 5 trades can be selected.", show_alert=True)
                     return
                 selected.append(idx)
             self.pending_multi_select[menu_id] = selected
 
             active_trades = PRICE_TRACKING_CONFIG['active_trades']
             buttons = []
-            for i, (msg_id, trade_data) in enumerate(list(active_trades.items())[:25]):
+            for i, (msg_id,
+                    trade_data) in enumerate(list(active_trades.items())[:25]):
                 pair = trade_data.get('pair', 'Unknown')
                 action = trade_data.get('action', 'Unknown')
                 tp_hits = trade_data.get('tp_hits', [])
@@ -1303,8 +1348,9 @@ class TelegramTradingBot:
                 group_label = f" [{group_name}]" if group_name else ""
                 checkbox = "☑" if str(i) in selected else "☐"
                 buttons.append([
-                    InlineKeyboardButton(f"{checkbox} {pair} - {action}{tp_status}{group_label}",
-                                         callback_data=f"ovr_{menu_id}_sel_{i}")
+                    InlineKeyboardButton(
+                        f"{checkbox} {pair} - {action}{tp_status}{group_label}",
+                        callback_data=f"ovr_{menu_id}_sel_{i}")
                 ])
             buttons.append([
                 InlineKeyboardButton("✅ Confirm Selection",
@@ -1327,13 +1373,15 @@ class TelegramTradingBot:
         if action_type == "confirm":
             selected = self.pending_multi_select.get(menu_id, [])
             if not selected:
-                await callback_query.answer("Please select at least one trade.", show_alert=True)
+                await callback_query.answer(
+                    "Please select at least one trade.", show_alert=True)
                 return
 
             trade_list = []
             for idx in selected:
                 full_msg_id = trade_mapping.get(idx)
-                if full_msg_id and full_msg_id in PRICE_TRACKING_CONFIG['active_trades']:
+                if full_msg_id and full_msg_id in PRICE_TRACKING_CONFIG[
+                        'active_trades']:
                     trade = PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
                     pair = trade.get('pair', 'Unknown')
                     action = trade.get('action', 'Unknown')
@@ -1344,16 +1392,38 @@ class TelegramTradingBot:
             if len(selected) == 1:
                 description = f"**Selected Trade:**\n{trade_list[0]}"
             else:
-                description = f"**Selected {len(selected)} Trades:**\n" + "\n".join(trade_list)
+                description = f"**Selected {len(selected)} Trades:**\n" + "\n".join(
+                    trade_list)
 
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 SL Hit", callback_data=f"ovr_{menu_id}_slhit")],
-                [InlineKeyboardButton("🟢 TP1 Hit", callback_data=f"ovr_{menu_id}_tp1hit")],
-                [InlineKeyboardButton("🟢 TP2 Hit", callback_data=f"ovr_{menu_id}_tp2hit")],
-                [InlineKeyboardButton("🚀 TP3 Hit", callback_data=f"ovr_{menu_id}_tp3hit")],
-                [InlineKeyboardButton("🟡 Breakeven Hit After TP2", callback_data=f"ovr_{menu_id}_behit")],
-                [InlineKeyboardButton("⏹️ End Tracking", callback_data=f"ovr_{menu_id}_endhit")],
-                [InlineKeyboardButton("Cancel", callback_data=f"ovr_{menu_id}_cancel")]
+                [
+                    InlineKeyboardButton("🔴 SL Hit",
+                                         callback_data=f"ovr_{menu_id}_slhit")
+                ],
+                [
+                    InlineKeyboardButton("🟢 TP1 Hit",
+                                         callback_data=f"ovr_{menu_id}_tp1hit")
+                ],
+                [
+                    InlineKeyboardButton("🟢 TP2 Hit",
+                                         callback_data=f"ovr_{menu_id}_tp2hit")
+                ],
+                [
+                    InlineKeyboardButton("🚀 TP3 Hit",
+                                         callback_data=f"ovr_{menu_id}_tp3hit")
+                ],
+                [
+                    InlineKeyboardButton("🟡 Breakeven Hit After TP2",
+                                         callback_data=f"ovr_{menu_id}_behit")
+                ],
+                [
+                    InlineKeyboardButton("⏹️ End Tracking",
+                                         callback_data=f"ovr_{menu_id}_endhit")
+                ],
+                [
+                    InlineKeyboardButton("Cancel",
+                                         callback_data=f"ovr_{menu_id}_cancel")
+                ]
             ])
 
             await callback_query.message.edit_text(
@@ -1364,10 +1434,13 @@ class TelegramTradingBot:
             await callback_query.answer()
             return
 
-        if action_type in ['slhit', 'tp1hit', 'tp2hit', 'tp3hit', 'behit', 'endhit']:
+        if action_type in [
+                'slhit', 'tp1hit', 'tp2hit', 'tp3hit', 'behit', 'endhit'
+        ]:
             selected = self.pending_multi_select.get(menu_id, [])
             if not selected:
-                await callback_query.answer("No trades selected.", show_alert=True)
+                await callback_query.answer("No trades selected.",
+                                            show_alert=True)
                 return
 
             successful_trades = []
@@ -1375,7 +1448,8 @@ class TelegramTradingBot:
 
             for idx in selected:
                 full_msg_id = trade_mapping.get(idx)
-                if not full_msg_id or full_msg_id not in PRICE_TRACKING_CONFIG['active_trades']:
+                if not full_msg_id or full_msg_id not in PRICE_TRACKING_CONFIG[
+                        'active_trades']:
                     failed_trades.append(f"ID {idx}: Not found")
                     continue
 
@@ -1388,64 +1462,96 @@ class TelegramTradingBot:
                 try:
                     if action_type == 'slhit':
                         trade['status'] = 'closed (sl hit - manual override)'
-                        await self.send_sl_notification(full_msg_id, trade, trade.get('sl_price', 0))
+                        await self.send_sl_notification(
+                            full_msg_id, trade, trade.get('sl_price', 0))
                         del PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
-                        await self.remove_trade_from_db(full_msg_id, 'manual_sl_hit')
-                        successful_trades.append(f"{pair} {action}{group_label} - SL Hit")
+                        await self.remove_trade_from_db(
+                            full_msg_id, 'manual_sl_hit')
+                        successful_trades.append(
+                            f"{pair} {action}{group_label} - SL Hit")
 
                     elif action_type == 'tp1hit':
                         if 'TP1' not in trade.get('tp_hits', []):
-                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
+                            trade['tp_hits'] = trade.get('tp_hits',
+                                                         []) + ['TP1']
                         trade['status'] = 'active (tp1 hit - manual override)'
-                        await self.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
+                        await self.send_tp_notification(
+                            full_msg_id, trade, 'TP1',
+                            trade.get('tp1_price', 0))
                         await self.update_trade_in_db(full_msg_id, trade)
-                        successful_trades.append(f"{pair} {action}{group_label} - TP1 Hit")
+                        successful_trades.append(
+                            f"{pair} {action}{group_label} - TP1 Hit")
 
                     elif action_type == 'tp2hit':
                         current_tp_hits = trade.get('tp_hits', [])
                         if 'TP1' not in current_tp_hits:
                             trade['tp_hits'] = current_tp_hits + ['TP1']
-                            await self.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
+                            await self.send_tp_notification(
+                                full_msg_id, trade, 'TP1',
+                                trade.get('tp1_price', 0))
                             await asyncio.sleep(1)
                         if 'TP2' not in trade.get('tp_hits', []):
-                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP2']
+                            trade['tp_hits'] = trade.get('tp_hits',
+                                                         []) + ['TP2']
                         trade['breakeven_active'] = True
-                        trade['status'] = 'active (tp2 hit - manual override - breakeven active)'
-                        await self.send_tp_notification(full_msg_id, trade, 'TP2', trade.get('tp2_price', 0))
+                        trade[
+                            'status'] = 'active (tp2 hit - manual override - breakeven active)'
+                        await self.send_tp_notification(
+                            full_msg_id, trade, 'TP2',
+                            trade.get('tp2_price', 0))
                         await self.update_trade_in_db(full_msg_id, trade)
-                        successful_trades.append(f"{pair} {action}{group_label} - TP2 Hit")
+                        successful_trades.append(
+                            f"{pair} {action}{group_label} - TP2 Hit")
 
                     elif action_type == 'tp3hit':
                         current_tp_hits = trade.get('tp_hits', [])
                         if 'TP1' not in current_tp_hits:
                             trade['tp_hits'] = current_tp_hits + ['TP1']
-                            await self.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
+                            await self.send_tp_notification(
+                                full_msg_id, trade, 'TP1',
+                                trade.get('tp1_price', 0))
                             await asyncio.sleep(1)
                         if 'TP2' not in trade.get('tp_hits', []):
-                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP2']
+                            trade['tp_hits'] = trade.get('tp_hits',
+                                                         []) + ['TP2']
                             trade['breakeven_active'] = True
-                            await self.send_tp_notification(full_msg_id, trade, 'TP2', trade.get('tp2_price', 0))
+                            await self.send_tp_notification(
+                                full_msg_id, trade, 'TP2',
+                                trade.get('tp2_price', 0))
                             await asyncio.sleep(1)
                         if 'TP3' not in trade.get('tp_hits', []):
-                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP3']
-                        trade['status'] = 'completed (tp3 hit - manual override)'
-                        await self.send_tp_notification(full_msg_id, trade, 'TP3', trade.get('tp3_price', 0))
+                            trade['tp_hits'] = trade.get('tp_hits',
+                                                         []) + ['TP3']
+                        trade[
+                            'status'] = 'completed (tp3 hit - manual override)'
+                        await self.send_tp_notification(
+                            full_msg_id, trade, 'TP3',
+                            trade.get('tp3_price', 0))
                         del PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
-                        await self.remove_trade_from_db(full_msg_id, 'manual_tp3_hit')
-                        successful_trades.append(f"{pair} {action}{group_label} - TP3 Hit")
+                        await self.remove_trade_from_db(
+                            full_msg_id, 'manual_tp3_hit')
+                        successful_trades.append(
+                            f"{pair} {action}{group_label} - TP3 Hit")
 
                     elif action_type == 'behit':
-                        trade['status'] = 'closed (breakeven after tp2 - manual override)'
-                        await self.send_breakeven_notification(full_msg_id, trade)
+                        trade[
+                            'status'] = 'closed (breakeven after tp2 - manual override)'
+                        await self.send_breakeven_notification(
+                            full_msg_id, trade)
                         del PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
-                        await self.remove_trade_from_db(full_msg_id, 'manual_breakeven_hit')
-                        successful_trades.append(f"{pair} {action}{group_label} - Breakeven After TP2")
+                        await self.remove_trade_from_db(
+                            full_msg_id, 'manual_breakeven_hit')
+                        successful_trades.append(
+                            f"{pair} {action}{group_label} - Breakeven After TP2"
+                        )
 
                     elif action_type == 'endhit':
                         trade['status'] = 'closed (ended by manual override)'
                         del PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
-                        await self.remove_trade_from_db(full_msg_id, 'manual_end_tracking')
-                        successful_trades.append(f"{pair} {action}{group_label} - Tracking Ended")
+                        await self.remove_trade_from_db(
+                            full_msg_id, 'manual_end_tracking')
+                        successful_trades.append(
+                            f"{pair} {action}{group_label} - Tracking Ended")
 
                 except Exception as e:
                     failed_trades.append(f"{pair}: {str(e)[:30]}")
@@ -1463,12 +1569,17 @@ class TelegramTradingBot:
 
             description = f"**Processed {total} trade(s)**\n\n"
             if successful_trades:
-                description += "**✅ Successful:**\n" + "\n".join(f"• {t}" for t in successful_trades) + "\n\n"
+                description += "**✅ Successful:**\n" + "\n".join(
+                    f"• {t}" for t in successful_trades) + "\n\n"
             if failed_trades:
-                description += "**❌ Failed:**\n" + "\n".join(f"• {t}" for t in failed_trades)
+                description += "**❌ Failed:**\n" + "\n".join(
+                    f"• {t}" for t in failed_trades)
 
-            await callback_query.message.edit_text(f"**{title}**\n\n{description}")
-            await self.log_to_debug(f"Manual override completed: {len(successful_trades)} success, {len(failed_trades)} failed")
+            await callback_query.message.edit_text(
+                f"**{title}**\n\n{description}")
+            await self.log_to_debug(
+                f"Manual override completed: {len(successful_trades)} success, {len(failed_trades)} failed"
+            )
 
         await callback_query.answer()
 
@@ -1766,8 +1877,8 @@ class TelegramTradingBot:
             f"**Welcome to FX Pip Pioneers!**\n\n"
             f"Hey {user.first_name}! Thanks for joining our trading community.\n\n"
             f"**Want to try our VIP Group for FREE?**\n"
-            f"We're offering a **3-day free trial** of our VIP Group where you'll receive     "
-            f"**6+ high-quality signals per day** with automatic TP/SL calculations and live price tracking.\n\n"
+            f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
+            f"**6+ high-quality trade signals per day**.\n\n"
             f"**Activate your free trial here:** https://t.me/+uM_Ug2wTKFpiMDVk\n\n"
             f"Good luck trading!")
 
@@ -1837,7 +1948,7 @@ class TelegramTradingBot:
             try:
                 await client.send_message(
                     user.id, f"**Trial Already Used**\n\n"
-                    f"You have already used your 3-day free trial.\n\n"
+                    f"You have already used your 3 trading days free trial.\n\n"
                     f"To continue accessing the VIP Group, please subscribe:\nhttps://whop.com/gold-pioneer/gold-pioneer/"
                 )
             except Exception as e:
@@ -1852,7 +1963,8 @@ class TelegramTradingBot:
             return
 
         is_weekend = self.is_weekend_time(current_time)
-        weekday = current_time.weekday()  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+        weekday = current_time.weekday(
+        )  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
         is_wed_or_thu = weekday in [2, 3]  # Wednesday or Thursday
         needs_extra_time = is_weekend or is_wed_or_thu
         duration_hours = 120 if needs_extra_time else 72
@@ -2147,7 +2259,8 @@ class TelegramTradingBot:
 
         pair = trade.get('pair', 'Unknown')
         action = trade.get('action', 'Unknown')
-        live_entry = trade.get('live_entry') or trade.get('entry') or trade.get('entry_price', 0)
+        live_entry = trade.get('live_entry') or trade.get(
+            'entry') or trade.get('entry_price', 0)
         tp_hits = trade.get('tp_hits', [])
 
         tp_status = f"TPs hit: {', '.join(tp_hits)}" if tp_hits else ""
@@ -2169,11 +2282,15 @@ class TelegramTradingBot:
                     notification,
                     reply_to_message_id=int(original_msg_id))
             except Exception as e:
-                logger.error(f"Failed to send breakeven hit notification to {chat_id}: {e}")
+                logger.error(
+                    f"Failed to send breakeven hit notification to {chat_id}: {e}"
+                )
                 try:
                     await self.app.send_message(chat_id, notification)
                 except Exception as e2:
-                    logger.error(f"Failed to send breakeven hit notification without reply: {e2}")
+                    logger.error(
+                        f"Failed to send breakeven hit notification without reply: {e2}"
+                    )
 
         del PRICE_TRACKING_CONFIG['active_trades'][message_id]
         await self.remove_trade_from_db(message_id, 'breakeven_hit')
@@ -2254,7 +2371,8 @@ class TelegramTradingBot:
             try:
                 await self.app.send_message(chat_id, notification)
             except Exception as e2:
-                logger.error(f"Failed to send TP notification without reply: {e2}")
+                logger.error(
+                    f"Failed to send TP notification without reply: {e2}")
 
     async def send_sl_notification(self, message_id: str, trade_data: dict,
                                    hit_price: float):
@@ -2296,7 +2414,8 @@ class TelegramTradingBot:
             try:
                 await self.app.send_message(chat_id, notification)
             except Exception as e2:
-                logger.error(f"Failed to send SL notification without reply: {e2}")
+                logger.error(
+                    f"Failed to send SL notification without reply: {e2}")
 
     async def send_breakeven_notification(self, message_id: str,
                                           trade_data: dict):
@@ -2334,11 +2453,14 @@ class TelegramTradingBot:
                 notification,
                 reply_to_message_id=int(original_msg_id))
         except Exception as e:
-            logger.error(f"Failed to send breakeven notification to {chat_id}: {e}")
+            logger.error(
+                f"Failed to send breakeven notification to {chat_id}: {e}")
             try:
                 await self.app.send_message(chat_id, notification)
             except Exception as e2:
-                logger.error(f"Failed to send breakeven notification without reply: {e2}")
+                logger.error(
+                    f"Failed to send breakeven notification without reply: {e2}"
+                )
 
     async def init_database(self):
         try:
@@ -2721,7 +2843,8 @@ class TelegramTradingBot:
                     if not channel_message_map and chat_id:
                         channel_message_map = {
                             str(chat_id):
-                            int(original_message_id) if original_message_id.isdigit() else 0
+                            int(original_message_id)
+                            if original_message_id.isdigit() else 0
                         }
                     if not all_channel_ids and chat_id:
                         all_channel_ids = [chat_id]
@@ -2736,8 +2859,10 @@ class TelegramTradingBot:
                     except (ValueError, TypeError, KeyError):
                         pass
 
-                    live_entry_val = float(row['live_entry']) if row.get('live_entry') else float(row['entry_price'])
-                    
+                    live_entry_val = float(
+                        row['live_entry']) if row.get('live_entry') else float(
+                            row['entry_price'])
+
                     PRICE_TRACKING_CONFIG['active_trades'][trade_key] = {
                         'message_id':
                         original_message_id,
@@ -3016,14 +3141,16 @@ class TelegramTradingBot:
                     continue
 
                 action = trade_data['action']
-                live_entry = trade_data.get('live_entry') or trade_data.get('entry', 0)
+                live_entry = trade_data.get('live_entry') or trade_data.get(
+                    'entry', 0)
                 tp_hits = trade_data.get('tp_hits', [])
                 breakeven_active = trade_data.get('breakeven_active', False)
 
                 if action == "BUY":
                     if breakeven_active and live_entry:
                         if current_price <= live_entry:
-                            await self.handle_breakeven_hit(message_id, trade_data)
+                            await self.handle_breakeven_hit(
+                                message_id, trade_data)
                             offline_hits_found += 1
                             continue
                     elif current_price <= trade_data['sl_price']:
@@ -3034,7 +3161,8 @@ class TelegramTradingBot:
                 elif action == "SELL":
                     if breakeven_active and live_entry:
                         if current_price >= live_entry:
-                            await self.handle_breakeven_hit(message_id, trade_data)
+                            await self.handle_breakeven_hit(
+                                message_id, trade_data)
                             offline_hits_found += 1
                             continue
                     elif current_price >= trade_data['sl_price']:
