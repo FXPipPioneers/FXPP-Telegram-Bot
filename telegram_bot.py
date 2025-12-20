@@ -84,12 +84,16 @@ if TELEGRAM_API_HASH:
 # Always print owner ID for debugging
 print(f"🔑 BOT_OWNER_USER_ID = {BOT_OWNER_USER_ID}")
 if BOT_OWNER_USER_ID == 0:
-    print(f"⚠️  WARNING: BOT_OWNER_USER_ID not set! Owner commands will not work. Check Render environment variables.")
+    print(
+        f"⚠️  WARNING: BOT_OWNER_USER_ID not set! Owner commands will not work. Check Render environment variables."
+    )
 else:
     print(f"✅ Bot owner commands enabled for user {BOT_OWNER_USER_ID}")
 
 print(f"🔗 VIP Trial invite link configured: https://t.me/+uM_Ug2wTKFpiMDVk")
-print(f"🔗 Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/")
+print(
+    f"🔗 Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/"
+)
 
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 
@@ -321,7 +325,8 @@ class TelegramTradingBot:
         self.awaiting_price_input = {}
         self.awaiting_custom_pair = {}
         self.override_trade_mappings = {}  # menu_id -> {idx: message_id}
-        self.trial_pending_approvals = set()  # Track user IDs approved for trial
+        self.trial_pending_approvals = set(
+        )  # Track user IDs approved for trial
 
         self._register_handlers()
 
@@ -389,6 +394,10 @@ class TelegramTradingBot:
         async def pricetest_callback(client, callback_query: CallbackQuery):
             await self.handle_pricetest_callback(client, callback_query)
 
+        @self.app.on_callback_query(filters.regex("^retrt_"))
+        async def retracttrial_callback(client, callback_query: CallbackQuery):
+            await self.handle_retracttrial_callback(client, callback_query)
+
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
@@ -412,7 +421,9 @@ class TelegramTradingBot:
         is_owner = user_id == BOT_OWNER_USER_ID
         if not is_owner and BOT_OWNER_USER_ID > 0:
             # Log failed owner checks for debugging
-            logger.debug(f"Owner check failed: user {user_id} != owner {BOT_OWNER_USER_ID}")
+            logger.debug(
+                f"Owner check failed: user {user_id} != owner {BOT_OWNER_USER_ID}"
+            )
         return is_owner
 
     async def handle_group_message(self, client: Client, message: Message):
@@ -702,44 +713,43 @@ class TelegramTradingBot:
             join_time = AMSTERDAM_TZ.localize(join_time)
         else:
             join_time = join_time.astimezone(AMSTERDAM_TZ)
-        
-        weekday = join_time.weekday()  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
-        
+
+        weekday = join_time.weekday(
+        )  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+
         # If joined on Saturday or Sunday, always expire Wednesday 22:59
         if weekday >= 5:  # 5=Saturday, 6=Sunday
             current_date = join_time.date()
             # Find the next Wednesday
             while current_date.weekday() != 2:  # 2 = Wednesday
                 current_date += timedelta(days=1)
-            
+
             expiry_time = AMSTERDAM_TZ.localize(
-                datetime(current_date.year, current_date.month, current_date.day, 22, 59, 0)
-            )
+                datetime(current_date.year, current_date.month,
+                         current_date.day, 22, 59, 0))
             return expiry_time
-        
+
         # For other weekdays, count exactly 3 trading days from join time
         trading_days_counted = 0
         current_date = join_time.date()
-        
+
         while True:
             day_weekday = current_date.weekday()
-            
+
             # Only count weekdays (Mon-Fri)
             if day_weekday < 5:
                 trading_days_counted += 1
-                
+
                 # If we've counted 3 trading days, set expiry at the same time as join
                 if trading_days_counted == 3:
-                    expiry_datetime = datetime(
-                        current_date.year, 
-                        current_date.month, 
-                        current_date.day,
-                        join_time.hour,
-                        join_time.minute,
-                        join_time.second
-                    )
+                    expiry_datetime = datetime(current_date.year,
+                                               current_date.month,
+                                               current_date.day,
+                                               join_time.hour,
+                                               join_time.minute,
+                                               join_time.second)
                     return AMSTERDAM_TZ.localize(expiry_datetime)
-            
+
             current_date += timedelta(days=1)
 
     def calculate_tp_sl_levels(self, entry_price: float, pair: str,
@@ -1910,58 +1920,343 @@ class TelegramTradingBot:
 
     async def handle_retract_trial(self, client: Client, message: Message):
         if not await self.is_owner(message.from_user.id):
-            await message.reply("❌ This command can only be used by the bot owner.")
+            await message.reply(
+                "❌ This command can only be used by the bot owner.")
             return
 
-        try:
-            parts = message.text.split()
-            if len(parts) < 3:
-                await message.reply(
-                    "Usage: /retracttrial <user_id> <minutes>\n\n"
-                    "Example: /retracttrial 123456789 295")
+        if not AUTO_ROLE_CONFIG['active_members']:
+            await message.reply("No active trial members found.")
+            return
+
+        # Initialize mappings if needed
+        if not hasattr(self, 'retracttrial_mappings'):
+            self.retracttrial_mappings = {}
+
+        menu_id = str(message.id)[-8:]
+        user_mapping = {}
+        buttons = []
+
+        # Show first 20 active trial members
+        for idx, (user_id_str, member_data) in enumerate(list(
+                AUTO_ROLE_CONFIG['active_members'].items())[:20]):
+            user_mapping[str(idx)] = user_id_str
+            expiry = datetime.fromisoformat(member_data.get('expiry_time', ''))
+            if expiry.tzinfo is None:
+                expiry = AMSTERDAM_TZ.localize(expiry)
+
+            hours_left = max(0, (expiry - datetime.now(AMSTERDAM_TZ)).total_seconds() / 3600)
+
+            buttons.append([
+                InlineKeyboardButton(
+                    f"User {user_id_str} ({hours_left:.1f}h left)",
+                    callback_data=f"retrt_{menu_id}_select_{idx}")
+            ])
+
+        self.retracttrial_mappings[menu_id] = user_mapping
+        buttons.append([
+            InlineKeyboardButton("Cancel",
+                                 callback_data=f"retrt_{menu_id}_cancel")
+        ])
+
+        keyboard = InlineKeyboardMarkup(buttons)
+        await message.reply(
+            "**Retract Trial Time**\n\n"
+            "Select a user to adjust their trial expiry time:",
+            reply_markup=keyboard)
+
+    async def handle_retracttrial_callback(self, client: Client,
+                                           callback_query: CallbackQuery):
+        user_id = callback_query.from_user.id
+
+        if not await self.is_owner(user_id):
+            await callback_query.answer("This is restricted to the bot owner.",
+                                        show_alert=True)
+            return
+
+        data = callback_query.data
+
+        if not data.startswith("retrt_"):
+            return
+
+        parts = data.split("_")
+        if len(parts) < 3:
+            await callback_query.answer("Invalid callback data.",
+                                        show_alert=True)
+            return
+
+        menu_id = parts[1]
+        action_type = parts[2]
+
+        if not hasattr(self, 'retracttrial_mappings'):
+            self.retracttrial_mappings = {}
+
+        if action_type == "cancel":
+            self.retracttrial_mappings.pop(menu_id, None)
+            await callback_query.message.edit_text("Cancelled.")
+            await callback_query.answer()
+            return
+
+        if action_type == "select":
+            idx = parts[3] if len(parts) > 3 else None
+            if not idx:
+                await callback_query.answer("Invalid selection.",
+                                            show_alert=True)
                 return
 
-            user_id = parts[1]
-            minutes = int(parts[2])
+            user_mapping = self.retracttrial_mappings.get(menu_id, {})
+            selected_user_id_str = user_mapping.get(idx)
 
-            if user_id not in AUTO_ROLE_CONFIG['active_members']:
-                await message.reply(f"User {user_id} not found in active trials.")
+            if not selected_user_id_str:
+                await callback_query.answer("User not found.",
+                                            show_alert=True)
                 return
 
-            member_data = AUTO_ROLE_CONFIG['active_members'][user_id]
-            old_expiry = datetime.fromisoformat(member_data['expiry_time'])
-            if old_expiry.tzinfo is None:
-                old_expiry = AMSTERDAM_TZ.localize(old_expiry)
+            # Show time adjustment menu
+            buttons = []
+            for hours in [1, 2, 3, 6, 12, 24]:
+                buttons.append([
+                    InlineKeyboardButton(
+                        f"Reduce {hours}h",
+                        callback_data=f"retrt_{menu_id}_reduce_{idx}_h{hours}")
+                ])
 
-            new_expiry = old_expiry - timedelta(minutes=minutes)
-            member_data['expiry_time'] = new_expiry.isoformat()
+            buttons.append([
+                InlineKeyboardButton("Custom Hours/Minutes",
+                                     callback_data=f"retrt_{menu_id}_custom_{idx}")
+            ])
+            buttons.append([
+                InlineKeyboardButton("Back",
+                                     callback_data=f"retrt_{menu_id}_back")
+            ])
+            buttons.append([
+                InlineKeyboardButton("Cancel",
+                                     callback_data=f"retrt_{menu_id}_cancel")
+            ])
 
-            if self.db_pool:
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute(
-                        "UPDATE active_members SET expiry_time = $1 WHERE member_id = $2",
-                        new_expiry, user_id)
+            keyboard = InlineKeyboardMarkup(buttons)
+            await callback_query.message.edit_text(
+                f"**Reducing trial for User {selected_user_id_str}**\n\n"
+                f"Select hours to subtract:",
+                reply_markup=keyboard)
+            await callback_query.answer()
+            return
 
-            await self.save_auto_role_config()
-            await message.reply(
-                f"✅ Retracted {minutes} minutes from user {user_id}\n"
-                f"New expiry: {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
+        if action_type == "reduce":
+            idx = parts[3] if len(parts) > 3 else None
+            hours_str = parts[4] if len(parts) > 4 else None
 
-        except ValueError:
-            await message.reply("Invalid format. Minutes must be a number.")
-        except Exception as e:
-            await message.reply(f"Error: {str(e)}")
+            if not idx or not hours_str or not hours_str.startswith("h"):
+                await callback_query.answer("Invalid action.",
+                                            show_alert=True)
+                return
+
+            try:
+                hours = int(hours_str[1:])
+                minutes = hours * 60
+
+                user_mapping = self.retracttrial_mappings.get(menu_id, {})
+                user_id_str = user_mapping.get(idx)
+
+                if not user_id_str or user_id_str not in AUTO_ROLE_CONFIG[
+                        'active_members']:
+                    await callback_query.answer("User not found.",
+                                                show_alert=True)
+                    return
+
+                member_data = AUTO_ROLE_CONFIG['active_members'][user_id_str]
+                old_expiry = datetime.fromisoformat(member_data['expiry_time'])
+                if old_expiry.tzinfo is None:
+                    old_expiry = AMSTERDAM_TZ.localize(old_expiry)
+
+                new_expiry = old_expiry - timedelta(minutes=minutes)
+                member_data['expiry_time'] = new_expiry.isoformat()
+
+                # Update database with integer user_id
+                if self.db_pool:
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE active_members SET expiry_time = $1 WHERE member_id = $2",
+                            new_expiry, int(user_id_str))
+
+                await self.save_auto_role_config()
+
+                self.retracttrial_mappings.pop(menu_id, None)
+                await callback_query.message.edit_text(
+                    f"✅ Subtracted {hours} hours from user {user_id_str}\n"
+                    f"New expiry: {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
+                await callback_query.answer()
+
+            except (ValueError, IndexError):
+                await callback_query.answer("Error processing request.",
+                                            show_alert=True)
+            except Exception as e:
+                await callback_query.message.edit_text(
+                    f"Error updating trial: {str(e)}")
+                await callback_query.answer()
+            return
+
+        if action_type == "custom":
+            # Handle custom hours/minutes selection
+            if len(parts) == 4:
+                # First custom click - show options
+                idx = parts[3] if len(parts) > 3 else None
+                if not idx:
+                    await callback_query.answer("Invalid selection.",
+                                                show_alert=True)
+                    return
+
+                user_mapping = self.retracttrial_mappings.get(menu_id, {})
+                selected_user_id_str = user_mapping.get(idx)
+
+                if not selected_user_id_str:
+                    await callback_query.answer("User not found.",
+                                                show_alert=True)
+                    return
+
+                buttons = []
+                for hours in [1, 2, 4, 8, 12, 18, 24]:
+                    buttons.append([
+                        InlineKeyboardButton(
+                            f"{hours}h",
+                            callback_data=f"retrt_{menu_id}_applycustom_{idx}_h{hours}")
+                    ])
+
+                buttons.append([
+                    InlineKeyboardButton("30 min",
+                                         callback_data=f"retrt_{menu_id}_applycustom_{idx}_m30"),
+                    InlineKeyboardButton("45 min",
+                                         callback_data=f"retrt_{menu_id}_applycustom_{idx}_m45")
+                ])
+                buttons.append([
+                    InlineKeyboardButton("Back",
+                                         callback_data=f"retrt_{menu_id}_back"),
+                    InlineKeyboardButton("Cancel",
+                                         callback_data=f"retrt_{menu_id}_cancel")
+                ])
+
+                keyboard = InlineKeyboardMarkup(buttons)
+                await callback_query.message.edit_text(
+                    f"**Custom Time for {selected_user_id_str}**\n\nSelect amount to subtract:",
+                    reply_markup=keyboard)
+                await callback_query.answer()
+            return
+
+        if action_type == "applycustom":
+            # Apply custom time reduction
+            idx = parts[3] if len(parts) > 3 else None
+            time_str = parts[4] if len(parts) > 4 else None
+
+            if not idx or not time_str:
+                await callback_query.answer("Invalid action.",
+                                            show_alert=True)
+                return
+
+            user_mapping = self.retracttrial_mappings.get(menu_id, {})
+            user_id_str = user_mapping.get(idx)
+
+            if not user_id_str or user_id_str not in AUTO_ROLE_CONFIG[
+                    'active_members']:
+                await callback_query.answer("User not found.",
+                                            show_alert=True)
+                return
+
+            try:
+                if time_str.startswith("h"):
+                    minutes = int(time_str[1:]) * 60
+                    label = f"{int(time_str[1:])}h"
+                elif time_str.startswith("m"):
+                    minutes = int(time_str[1:])
+                    label = f"{minutes} min"
+                else:
+                    await callback_query.answer("Invalid time format.",
+                                                show_alert=True)
+                    return
+
+                member_data = AUTO_ROLE_CONFIG['active_members'][user_id_str]
+                old_expiry = datetime.fromisoformat(member_data['expiry_time'])
+                if old_expiry.tzinfo is None:
+                    old_expiry = AMSTERDAM_TZ.localize(old_expiry)
+
+                new_expiry = old_expiry - timedelta(minutes=minutes)
+                member_data['expiry_time'] = new_expiry.isoformat()
+
+                # Update database with integer user_id
+                if self.db_pool:
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE active_members SET expiry_time = $1 WHERE member_id = $2",
+                            new_expiry, int(user_id_str))
+
+                await self.save_auto_role_config()
+                self.retracttrial_mappings.pop(menu_id, None)
+
+                await callback_query.message.edit_text(
+                    f"✅ Subtracted {label} from user {user_id_str}\n"
+                    f"New expiry: {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
+                await callback_query.answer()
+
+            except (ValueError, IndexError):
+                await callback_query.answer("Error processing request.",
+                                            show_alert=True)
+            except Exception as e:
+                await callback_query.message.edit_text(
+                    f"Error updating trial: {str(e)}")
+                await callback_query.answer()
+            return
+
+        if action_type == "back":
+            # Return to user selection menu
+            if not hasattr(self, 'retracttrial_mappings'):
+                self.retracttrial_mappings = {}
+
+            buttons = []
+            for idx, user_id_str in self.retracttrial_mappings.get(
+                    menu_id, {}).items():
+                if user_id_str in AUTO_ROLE_CONFIG['active_members']:
+                    member_data = AUTO_ROLE_CONFIG['active_members'][
+                        user_id_str]
+                    expiry = datetime.fromisoformat(
+                        member_data.get('expiry_time', ''))
+                    if expiry.tzinfo is None:
+                        expiry = AMSTERDAM_TZ.localize(expiry)
+
+                    hours_left = max(0, (expiry - datetime.now(AMSTERDAM_TZ)).
+                                    total_seconds() / 3600)
+
+                    buttons.append([
+                        InlineKeyboardButton(
+                            f"User {user_id_str} ({hours_left:.1f}h left)",
+                            callback_data=f"retrt_{menu_id}_select_{idx}")
+                    ])
+
+            buttons.append([
+                InlineKeyboardButton("Cancel",
+                                     callback_data=f"retrt_{menu_id}_cancel")
+            ])
+
+            keyboard = InlineKeyboardMarkup(buttons)
+            await callback_query.message.edit_text(
+                "**Retract Trial Time**\n\n"
+                "Select a user to adjust their trial expiry time:",
+                reply_markup=keyboard)
+            await callback_query.answer()
+            return
+
+        await callback_query.answer()
 
     async def handle_clear_member(self, client: Client, message: Message):
         """Remove a user from all trial tracking tables (active_members, role_history, dm_schedule, weekend_pending)"""
         if not await self.is_owner(message.from_user.id):
-            await message.reply("❌ This command can only be used by the bot owner.")
+            await message.reply(
+                "❌ This command can only be used by the bot owner.")
             return
 
         try:
             parts = message.text.split()
             if len(parts) < 2:
-                await message.reply("Usage: /clearmember <user_id>\n\nExample: /clearmember 5115200383")
+                await message.reply(
+                    "Usage: /clearmember <user_id>\n\nExample: /clearmember 5115200383"
+                )
                 return
 
             user_id = parts[1]
@@ -1976,32 +2271,61 @@ class TelegramTradingBot:
             # Remove from database
             if self.db_pool:
                 async with self.db_pool.acquire() as conn:
-                    await conn.execute("DELETE FROM active_members WHERE member_id = $1", int(user_id))
-                    await conn.execute("DELETE FROM role_history WHERE member_id = $1", int(user_id))
-                    await conn.execute("DELETE FROM dm_schedule WHERE member_id = $1", int(user_id))
-                    await conn.execute("DELETE FROM weekend_pending WHERE member_id = $1", int(user_id))
+                    await conn.execute(
+                        "DELETE FROM active_members WHERE member_id = $1",
+                        int(user_id))
+                    await conn.execute(
+                        "DELETE FROM role_history WHERE member_id = $1",
+                        int(user_id))
+                    await conn.execute(
+                        "DELETE FROM dm_schedule WHERE member_id = $1",
+                        int(user_id))
+                    await conn.execute(
+                        "DELETE FROM weekend_pending WHERE member_id = $1",
+                        int(user_id))
 
             await self.save_auto_role_config()
-            await message.reply(f"✅ User {user_id} removed from all trial tracking")
+            await message.reply(
+                f"✅ User {user_id} removed from all trial tracking")
 
         except Exception as e:
             await message.reply(f"Error: {str(e)}")
 
     async def process_join_request(self, client: Client,
                                    join_request: ChatJoinRequest):
+        # Debug: always log that we received a join request
+        chat_name = getattr(join_request.chat, 'title', 'Unknown')
+        logger.info(f"📨 Join request received from {join_request.from_user.first_name} (ID: {join_request.from_user.id}) in chat {chat_name} (ID: {join_request.chat.id})")
+        
+        # Validate VIP_GROUP_ID
+        if VIP_GROUP_ID == 0:
+            logger.error("❌ VIP_GROUP_ID not set! Join requests cannot be processed.")
+            return
+        
         if join_request.chat.id != VIP_GROUP_ID:
+            logger.debug(f"Join request is for different group (got {join_request.chat.id}, expected {VIP_GROUP_ID})")
             return
 
         try:
             user_id = join_request.from_user.id
+            user_name = join_request.from_user.first_name or str(user_id)
+            
             # Track this user as trial approval (they're joining via trial link with approval)
             self.trial_pending_approvals.add(user_id)
+            logger.info(f"✅ Added {user_id} to trial_pending_approvals set")
+            
+            # Actually approve the request
             await join_request.approve()
+            logger.info(f"✅ Successfully approved join request for {user_name} (ID: {user_id})")
+            
             await self.log_to_debug(
-                f"Auto-approved trial join from {join_request.from_user.first_name} (ID: {user_id})"
+                f"🎯 Auto-approved trial join request from {user_name} (ID: {user_id}) - waiting for member join event..."
             )
         except Exception as e:
-            logger.error(f"Error auto-approving join request: {e}")
+            logger.error(f"❌ Error auto-approving join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}")
+            await self.log_to_debug(
+                f"❌ Failed to approve join request from {join_request.from_user.first_name} (ID: {join_request.from_user.id}): {e}"
+            )
 
     async def process_member_update(self, client: Client,
                                     member_update: ChatMemberUpdated):
@@ -2036,15 +2360,14 @@ class TelegramTradingBot:
             f"New member joined FREE group: {user.first_name} (ID: {user.id})")
 
         welcome_dm = (
-            f"**Welcome to FX Pip Pioneers!**\n\n"
-            f"Hey {user.first_name}! Thanks for joining our trading community.\n\n"
+            f"**Hey {user.first_name}, Welcome to FX Pip Pioneers!**\n\n"
             f"**Want to try our VIP Group for FREE?**\n"
             f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
             f"**6+ high-quality trade signals per day**.\n\n"
             f"**Activate your free trial here:** https://t.me/+uM_Ug2wTKFpiMDVk\n\n"
             f"Good luck trading!")
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(3)
 
         try:
             await client.send_message(user.id, welcome_dm)
@@ -2064,14 +2387,15 @@ class TelegramTradingBot:
 
         # Determine if this is a trial user (they were approved for trial access)
         is_trial_user = user.id in self.trial_pending_approvals
-        
+
         # Remove from pending so we don't register twice
         self.trial_pending_approvals.discard(user.id)
-        
+
         # If not trial user, don't register - they're paying members
         if not is_trial_user:
             await self.log_to_debug(
-                f"💳 {user.first_name} (ID: {user.id}) joined via paid link - no trial registration needed")
+                f"💳 {user.first_name} (ID: {user.id}) joined via paid link - no trial registration needed"
+            )
             return
 
         await self.log_to_debug(
@@ -2136,7 +2460,7 @@ class TelegramTradingBot:
 
         # Calculate expiry time to ensure exactly 3 trading days
         expiry_time = self.calculate_trial_expiry_time(current_time)
-        
+
         # Determine if joined during weekend for tracking
         is_weekend = self.is_weekend_time(current_time)
 
@@ -2159,8 +2483,7 @@ class TelegramTradingBot:
             f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
             f"**access to the VIP Group for 3 trading days.** "
             f"Your access will expire on {expiry_time.strftime('%A at %H:%M')}. "
-            f"Good luck trading!"
-        )
+            f"Good luck trading!")
 
         try:
             await client.send_message(user.id, welcome_msg)
@@ -3630,8 +3953,7 @@ class TelegramTradingBot:
                     BotCommand("dmstatus", "DM delivery statistics"),
                     BotCommand("retracttrial",
                                "Retract trial minutes from user"),
-                    BotCommand("clearmember",
-                               "Remove user from trial system"),
+                    BotCommand("clearmember", "Remove user from trial system"),
                 ]
                 await self.app.set_bot_commands(
                     owner_commands,
