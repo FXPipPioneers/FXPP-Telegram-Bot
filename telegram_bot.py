@@ -71,7 +71,7 @@ VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
 DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID", "0"))
 FREE_GROUP_LINK = os.getenv("FREE_GROUP_LINK", "")
 VIP_GROUP_LINK = os.getenv("VIP_GROUP_LINK", "")
-VIP_TRIAL_INVITE_LINK = "https://t.me/+uM_Ug2wTKFpiMDVk"
+VIP_TRIAL_INVITE_LINK = "https://t.me/+CAIhr3HMwYUwYzg0"
 WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
 
 if TELEGRAM_BOT_TOKEN:
@@ -90,7 +90,7 @@ if BOT_OWNER_USER_ID == 0:
 else:
     print(f"✅ Bot owner commands enabled for user {BOT_OWNER_USER_ID}")
 
-print(f"🔗 VIP Trial invite link configured: https://t.me/+uM_Ug2wTKFpiMDVk")
+print(f"🔗 VIP Trial invite link configured: https://t.me/+CAIhr3HMwYUwYzg0")
 print(
     f"🔗 Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/"
 )
@@ -1161,7 +1161,7 @@ class TelegramTradingBot:
         user_id = message.from_user.id
 
         if not await self.is_owner(user_id):
-            owner_mention = f"[Contact Owner](tg://user?id={BOT_OWNER_USER_ID})" if BOT_OWNER_USER_ID else "the bot owner"
+            owner_mention = "@fx_pippioneers"
             await message.reply(
                 f"❌ **This bot cannot respond to direct messages from members.**\n\n"
                 f"If you need support or have any questions, please contact {owner_mention}."
@@ -2832,37 +2832,36 @@ class TelegramTradingBot:
         await self.log_to_debug(
             f"New member joined FREE group: {user.first_name} (ID: {user.id})")
 
-        # TEMPORARILY DISABLED FOR TESTING
-        # welcome_dm = (
-        #     f"**Hey {user.first_name}, Welcome to FX Pip Pioneers!**\n\n"
-        #     f"**Want to try our VIP Group for FREE?**\n"
-        #     f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
-        #     f"**6+ high-quality trade signals per day**.\n\n"
-        #     f"**Activate your free trial here:** https://t.me/+uM_Ug2wTKFpiMDVk\n\n"
-        #     f"Good luck trading!")
+        welcome_dm = (
+            f"**Hey {user.first_name}, Welcome to FX Pip Pioneers!**\n\n"
+            f"**Want to try our VIP Group for FREE?**\n"
+            f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
+            f"**6+ high-quality trade signals per day**.\n\n"
+            f"**Activate your free trial here:** https://t.me/+CAIhr3HMwYUwYzg0\n\n"
+            f"Good luck trading!")
 
-        # await asyncio.sleep(5)
+        await asyncio.sleep(5)
 
-        # try:
-        #     await client.send_message(user.id, welcome_dm)
-        #     await self.log_to_debug(
-        #         f"Sent welcome DM to {user.first_name} about VIP trial")
-        # except Exception as e:
-        #     error_str = str(e)
-        #     if "PEER_ID_INVALID" in error_str:
-        #         logger.warning(
-        #             f"Peer not established yet for {user.first_name} (ID: {user.id}). Will retry after delay.")
-        #         await asyncio.sleep(10)
-        #         try:
-        #             await client.send_message(user.id, welcome_dm)
-        #             await self.log_to_debug(
-        #                 f"Sent welcome DM to {user.first_name} after retry")
-        #         except Exception as retry_error:
-        #             logger.error(
-        #                 f"Could not send welcome DM to {user.first_name} after retry: {retry_error}")
-        #     else:
-        #         logger.error(
-        #             f"Could not send welcome DM to {user.first_name}: {e}")
+        try:
+            await client.send_message(user.id, welcome_dm)
+            await self.log_to_debug(
+                f"Sent welcome DM to {user.first_name} about VIP trial")
+        except Exception as e:
+            error_str = str(e)
+            if "PEER_ID_INVALID" in error_str:
+                logger.warning(
+                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Will retry after delay.")
+                await asyncio.sleep(10)
+                try:
+                    await client.send_message(user.id, welcome_dm)
+                    await self.log_to_debug(
+                        f"Sent welcome DM to {user.first_name} after retry")
+                except Exception as retry_error:
+                    logger.error(
+                        f"Could not send welcome DM to {user.first_name} after retry: {retry_error}")
+            else:
+                logger.error(
+                    f"Could not send welcome DM to {user.first_name}: {e}")
 
     async def handle_vip_group_join(self, client: Client, user, invite_link):
         """
