@@ -74,8 +74,6 @@ VIP_GROUP_LINK = os.getenv("VIP_GROUP_LINK", "")
 VIP_TRIAL_INVITE_LINK = "https://t.me/+uM_Ug2wTKFpiMDVk"
 WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
 
-# Pyrogram doesn't support Telegram topics - removed topic routing
-# All debug logs now go to DEBUG_GROUP_ID main message area with emoji prefixes for categorization
 
 if TELEGRAM_BOT_TOKEN:
     print(f"Telegram bot token loaded")
@@ -600,30 +598,10 @@ class TelegramTradingBot:
             logger.error(f"Error parsing signal message: {e}")
             return None
 
-    def _get_log_emoji(self, message: str) -> str:
-        """Determine emoji category for debug message"""
-        msg_lower = message.lower()
-        
-        if any(keyword in msg_lower for keyword in ["joined", "left", "trial expired", "member", "new user"]):
-            return "👤"
-        elif any(keyword in msg_lower for keyword in ["signal detected", "parsing signal", "api assignment", "tracking activated", "excluded"]):
-            return "📊"
-        elif any(keyword in msg_lower for keyword in ["price tracking", "live price", "price retrieval", "offline", "tp/sl", "api limit", "price test"]):
-            return "📈"
-        elif any(keyword in msg_lower for keyword in ["override", "trade removal", "manual override"]):
-            return "🔧"
-        else:
-            return "⚠️"
-
     async def log_to_debug(self, message: str):
         if DEBUG_GROUP_ID:
             try:
-                emoji = self._get_log_emoji(message)
-                await self.app.get_chat(DEBUG_GROUP_ID)
-                await self.app.send_message(
-                    DEBUG_GROUP_ID,
-                    f"{emoji} {message}"
-                )
+                await self.app.send_message(DEBUG_GROUP_ID, f"**Bot Log:** {message}")
             except Exception as e:
                 logger.error(f"Failed to send debug log: {e}")
         logger.info(message)
@@ -1788,7 +1766,7 @@ class TelegramTradingBot:
             f"**Welcome to FX Pip Pioneers!**\n\n"
             f"Hey {user.first_name}! Thanks for joining our trading community.\n\n"
             f"**Want to try our VIP Group for FREE?**\n"
-            f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
+            f"We're offering a **3-day free trial** of our VIP Group where you'll receive     "
             f"**6+ high-quality signals per day** with automatic TP/SL calculations and live price tracking.\n\n"
             f"**Activate your free trial here:** https://t.me/+uM_Ug2wTKFpiMDVk\n\n"
             f"Good luck trading!")
@@ -1874,13 +1852,16 @@ class TelegramTradingBot:
             return
 
         is_weekend = self.is_weekend_time(current_time)
-        duration_hours = 120 if is_weekend else 72
+        weekday = current_time.weekday()  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+        is_wed_or_thu = weekday in [2, 3]  # Wednesday or Thursday
+        needs_extra_time = is_weekend or is_wed_or_thu
+        duration_hours = 120 if needs_extra_time else 72
         expiry_time = current_time + timedelta(hours=duration_hours)
 
         AUTO_ROLE_CONFIG['active_members'][user_id_str] = {
             'joined_at': current_time.isoformat(),
             'expiry_time': expiry_time.isoformat(),
-            'weekend_delayed': is_weekend,
+            'weekend_delayed': needs_extra_time,
             'chat_id': VIP_GROUP_ID
         }
 
@@ -1892,11 +1873,11 @@ class TelegramTradingBot:
 
         await self.save_auto_role_config()
 
-        if is_weekend:
+        if needs_extra_time:
             welcome_msg = (
                 f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
-                f"**access to the VIP Group for 3 trading days.** Since you joined during the weekend, "
-                f"your access will expire in 5 days (120 hours) to account for the 2 weekend days when the markets are closed. "
+                f"**access to the VIP Group for 3 trading days.** Since you joined during a time that includes the weekend, "
+                f"your access will expire in 5 days (120 hours) to account for the weekend days when the markets are closed. "
                 f"This way, you get the full 3 trading days of VIP access. Good luck trading!"
             )
         else:
