@@ -360,13 +360,6 @@ class TelegramTradingBot:
         async def timed_auto_role_command(client, message: Message):
             await self.handle_timed_auto_role(client, message)
 
-        @self.app.on_message(filters.command("retracttrial"))
-        async def retract_trial_command(client, message: Message):
-            await self.handle_retract_trial(client, message)
-
-        @self.app.on_message(filters.command("clearmember"))
-        async def clear_member_command(client, message: Message):
-            await self.handle_clear_member(client, message)
 
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
@@ -394,21 +387,18 @@ class TelegramTradingBot:
         async def pricetest_callback(client, callback_query: CallbackQuery):
             await self.handle_pricetest_callback(client, callback_query)
 
-        @self.app.on_callback_query(filters.regex("^retrt_"))
-        async def retracttrial_callback(client, callback_query: CallbackQuery):
-            await self.handle_retracttrial_callback(client, callback_query)
 
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "freetrialusers", "retracttrial"
+                "dbstatus", "dmstatus", "freetrialusers"
             ]))
         async def text_input_handler(client, message: Message):
             await self.handle_text_input(client, message)
 
         @self.app.on_message(filters.group & filters.text & ~filters.command([
             "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
-            "dmstatus", "freetrialusers", "retracttrial"
+            "dmstatus", "freetrialusers"
         ]))
         async def group_message_handler(client, message: Message):
             await self.handle_group_message(client, message)
@@ -1072,36 +1062,65 @@ class TelegramTradingBot:
                 trade_key = f"{channel_id}_{sent_msg.id}"
 
                 trade_data = {
-                    'message_id': str(sent_msg.id),
-                    'trade_key': trade_key,
-                    'chat_id': sent_msg.chat.id,
-                    'pair': pair,
-                    'action': action,
-                    'entry_type': entry_type,
-                    'entry_price': float(entry_price),
-                    'tp1_price': float(live_tracking_levels['tp1']),
-                    'tp2_price': float(live_tracking_levels['tp2']),
-                    'tp3_price': float(live_tracking_levels['tp3']),
-                    'sl_price': float(live_tracking_levels['sl']),
-                    'entry': float(live_price),
-                    'tp1': float(live_tracking_levels['tp1']),
-                    'tp2': float(live_tracking_levels['tp2']),
-                    'tp3': float(live_tracking_levels['tp3']),
-                    'sl': float(live_tracking_levels['sl']),
-                    'telegram_entry': float(entry_price),
-                    'telegram_tp1': float(levels['tp1']),
-                    'telegram_tp2': float(levels['tp2']),
-                    'telegram_tp3': float(levels['tp3']),
-                    'telegram_sl': float(levels['sl']),
-                    'live_entry': float(live_price),
-                    'assigned_api': assigned_api,
-                    'status': 'active',
+                    'message_id':
+                    str(sent_msg.id),
+                    'trade_key':
+                    trade_key,
+                    'chat_id':
+                    sent_msg.chat.id,
+                    'pair':
+                    pair,
+                    'action':
+                    action,
+                    'entry_type':
+                    entry_type,
+                    'entry_price':
+                    float(entry_price),
+                    'tp1_price':
+                    float(live_tracking_levels['tp1']),
+                    'tp2_price':
+                    float(live_tracking_levels['tp2']),
+                    'tp3_price':
+                    float(live_tracking_levels['tp3']),
+                    'sl_price':
+                    float(live_tracking_levels['sl']),
+                    'entry':
+                    float(live_price),
+                    'tp1':
+                    float(live_tracking_levels['tp1']),
+                    'tp2':
+                    float(live_tracking_levels['tp2']),
+                    'tp3':
+                    float(live_tracking_levels['tp3']),
+                    'sl':
+                    float(live_tracking_levels['sl']),
+                    'telegram_entry':
+                    float(entry_price),
+                    'telegram_tp1':
+                    float(levels['tp1']),
+                    'telegram_tp2':
+                    float(levels['tp2']),
+                    'telegram_tp3':
+                    float(levels['tp3']),
+                    'telegram_sl':
+                    float(levels['sl']),
+                    'live_entry':
+                    float(live_price),
+                    'assigned_api':
+                    assigned_api,
+                    'status':
+                    'active',
                     'tp_hits': [],
                     'manual_overrides': [],
-                    'breakeven_active': False,
-                    'created_at': datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ).isoformat(),
-                    'group_name': group_name,
-                    'channel_id': channel_id
+                    'breakeven_active':
+                    False,
+                    'created_at':
+                    datetime.now(
+                        pytz.UTC).astimezone(AMSTERDAM_TZ).isoformat(),
+                    'group_name':
+                    group_name,
+                    'channel_id':
+                    channel_id
                 }
 
                 PRICE_TRACKING_CONFIG['active_trades'][trade_key] = trade_data
@@ -1138,17 +1157,17 @@ class TelegramTradingBot:
         # Handle retracttrial custom input
         if not hasattr(self, 'awaiting_retracttrial_input'):
             self.awaiting_retracttrial_input = {}
-        
+
         if user_id in self.awaiting_retracttrial_input:
             try:
                 context = self.awaiting_retracttrial_input.pop(user_id)
                 menu_id = context['menu_id']
                 idx = context['idx']
                 user_id_str = context['user_id_str']
-                
+
                 text = message.text.strip().lower()
                 total_minutes = 0
-                
+
                 # Parse input like "5h", "30m", "2h 15m", etc.
                 parts = text.split()
                 for part in parts:
@@ -1164,33 +1183,35 @@ class TelegramTradingBot:
                             total_minutes += m
                         except ValueError:
                             pass
-                
+
                 if total_minutes <= 0:
-                    await message.reply("Please enter a valid time (e.g., '5h' or '30m' or '2h 15m')")
+                    await message.reply(
+                        "Please enter a valid time (e.g., '5h' or '30m' or '2h 15m')"
+                    )
                     return
-                
+
                 if user_id_str not in AUTO_ROLE_CONFIG['active_members']:
                     await message.reply("User not found in active trials.")
                     return
-                
+
                 member_data = AUTO_ROLE_CONFIG['active_members'][user_id_str]
                 old_expiry = datetime.fromisoformat(member_data['expiry_time'])
                 if old_expiry.tzinfo is None:
                     old_expiry = AMSTERDAM_TZ.localize(old_expiry)
-                
+
                 new_expiry = old_expiry - timedelta(minutes=total_minutes)
                 member_data['expiry_time'] = new_expiry.isoformat()
-                
+
                 # Update database
                 if self.db_pool:
                     async with self.db_pool.acquire() as conn:
                         await conn.execute(
                             "UPDATE active_members SET expiry_time = $1 WHERE member_id = $2",
                             new_expiry, int(user_id_str))
-                
+
                 await self.save_auto_role_config()
                 self.retracttrial_mappings.pop(menu_id, None)
-                
+
                 hours = total_minutes // 60
                 mins = total_minutes % 60
                 if hours > 0 and mins > 0:
@@ -1199,7 +1220,7 @@ class TelegramTradingBot:
                     label = f"{hours}h"
                 else:
                     label = f"{mins}m"
-                
+
                 await message.reply(
                     f"✅ Subtracted {label} from user {user_id_str}\n"
                     f"New expiry: {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1921,13 +1942,13 @@ class TelegramTradingBot:
             return
 
         keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("View Stats", callback_data="tar_status")],
-             [
-                 InlineKeyboardButton("List Active Users",
-                                      callback_data="tar_list")
-             ], [InlineKeyboardButton("Cancel", callback_data="tar_cancel")]])
+            [[InlineKeyboardButton("📊 View Stats", callback_data="tar_status")],
+             [InlineKeyboardButton("📋 List Active Users", callback_data="tar_list")],
+             [InlineKeyboardButton("⏱️ Edit Time Duration", callback_data="tar_retract")],
+             [InlineKeyboardButton("🗑️ Clear Trial History", callback_data="tar_clear")],
+             [InlineKeyboardButton("Cancel", callback_data="tar_cancel")]])
 
-        await message.reply("**Trial System Menu**\n\n"
+        await message.reply("**Free Trial Management**\n\n"
                             "Select an option:",
                             reply_markup=keyboard)
 
@@ -1991,6 +2012,269 @@ class TelegramTradingBot:
 
             await callback_query.message.edit_text(response)
 
+        elif data == "tar_retract":
+            if not AUTO_ROLE_CONFIG['active_members']:
+                await callback_query.message.edit_text("No active trial members found.")
+                await callback_query.answer()
+                return
+
+            if not hasattr(self, 'retracttrial_mappings'):
+                self.retracttrial_mappings = {}
+
+            menu_id = f"rt_{int(time.time() * 1000)}"
+            user_mapping = {}
+            buttons = []
+
+            for idx, (user_id_str, member_data) in enumerate(
+                    list(AUTO_ROLE_CONFIG['active_members'].items())[:20]):
+                user_mapping[str(idx)] = user_id_str
+                expiry = datetime.fromisoformat(member_data.get('expiry_time', ''))
+                if expiry.tzinfo is None:
+                    expiry = AMSTERDAM_TZ.localize(expiry)
+
+                total_seconds = max(0, (expiry - datetime.now(
+                    pytz.UTC).astimezone(AMSTERDAM_TZ)).total_seconds())
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+
+                buttons.append([
+                    InlineKeyboardButton(
+                        f"User {user_id_str} ({hours}h {minutes}m left)",
+                        callback_data=f"retrt_{menu_id}_select_{idx}")
+                ])
+
+            self.retracttrial_mappings[menu_id] = user_mapping
+            buttons.append([
+                InlineKeyboardButton("Back", callback_data="tar_status"),
+                InlineKeyboardButton("Cancel", callback_data=f"retrt_{menu_id}_cancel")
+            ])
+
+            keyboard = InlineKeyboardMarkup(buttons)
+            await callback_query.message.edit_text(
+                "**Retract Trial Time**\n\n"
+                "Select a user to adjust their trial expiry time:",
+                reply_markup=keyboard)
+
+        elif data == "tar_clear":
+            if not AUTO_ROLE_CONFIG['active_members']:
+                await callback_query.message.edit_text("No active trial members found.")
+                await callback_query.answer()
+                return
+
+            if not hasattr(self, 'cleartrial_mappings'):
+                self.cleartrial_mappings = {}
+
+            menu_id = f"ct_{int(time.time() * 1000)}"
+            user_mapping = {}
+            buttons = []
+
+            for idx, (user_id_str, member_data) in enumerate(
+                    list(AUTO_ROLE_CONFIG['active_members'].items())[:20]):
+                user_mapping[str(idx)] = user_id_str
+                buttons.append([
+                    InlineKeyboardButton(
+                        f"User {user_id_str}",
+                        callback_data=f"clrtrl_{menu_id}_select_{idx}")
+                ])
+
+            buttons.append([
+                InlineKeyboardButton(
+                    "📝 Enter Custom Member ID",
+                    callback_data=f"clrtrl_{menu_id}_custom")
+            ])
+            buttons.append([
+                InlineKeyboardButton("Back", callback_data="tar_status"),
+                InlineKeyboardButton("Cancel", callback_data=f"clrtrl_{menu_id}_cancel")
+            ])
+
+            self.cleartrial_mappings[menu_id] = user_mapping
+            keyboard = InlineKeyboardMarkup(buttons)
+            await callback_query.message.edit_text(
+                "**Clear Trial History**\n\n"
+                "Select a user to remove from trial tracking, or enter a custom member ID:",
+                reply_markup=keyboard)
+
+        await callback_query.answer()
+
+    async def handle_retracttrial_callback(self, client: Client,
+                                           callback_query: CallbackQuery):
+        user_id = callback_query.from_user.id
+
+        if not await self.is_owner(user_id):
+            await callback_query.answer("This is restricted to the bot owner.",
+                                        show_alert=True)
+            return
+
+        data = callback_query.data
+
+        if not data.startswith("retrt_"):
+            return
+
+        parts = data.split("_")
+        if len(parts) < 3:
+            await callback_query.answer("Invalid callback data.",
+                                        show_alert=True)
+            return
+
+        menu_id = parts[1]
+        action_type = parts[2]
+
+        if not hasattr(self, 'retracttrial_mappings'):
+            self.retracttrial_mappings = {}
+
+        if action_type == "cancel":
+            self.retracttrial_mappings.pop(menu_id, None)
+            await callback_query.message.edit_text("Cancelled.")
+            await callback_query.answer()
+            return
+
+        if action_type == "select":
+            idx = parts[3] if len(parts) > 3 else None
+            if not idx:
+                await callback_query.answer("Invalid selection.",
+                                            show_alert=True)
+                return
+
+            user_mapping = self.retracttrial_mappings.get(menu_id, {})
+            selected_user_id_str = user_mapping.get(idx)
+
+            if not selected_user_id_str:
+                await callback_query.answer("User not found.", show_alert=True)
+                return
+
+            buttons = []
+            for hours in [1, 2, 3, 6, 12, 24]:
+                buttons.append([
+                    InlineKeyboardButton(
+                        f"Reduce {hours}h",
+                        callback_data=f"retrt_{menu_id}_reduce_{idx}_h{hours}")
+                ])
+
+            buttons.append([
+                InlineKeyboardButton(
+                    "Custom Hours/Minutes",
+                    callback_data=f"retrt_{menu_id}_custom_{idx}")
+            ])
+            buttons.append([
+                InlineKeyboardButton("Back",
+                                     callback_data=f"retrt_{menu_id}_back")
+            ])
+            buttons.append([
+                InlineKeyboardButton("Cancel",
+                                     callback_data=f"retrt_{menu_id}_cancel")
+            ])
+
+            keyboard = InlineKeyboardMarkup(buttons)
+            await callback_query.message.edit_text(
+                f"**Reducing trial for User {selected_user_id_str}**\n\n"
+                f"Select hours to subtract:",
+                reply_markup=keyboard)
+            await callback_query.answer()
+            return
+
+        if action_type == "reduce":
+            idx = parts[3] if len(parts) > 3 else None
+            hours_str = parts[4] if len(parts) > 4 else None
+
+            if not idx or not hours_str or not hours_str.startswith("h"):
+                await callback_query.answer("Invalid action.", show_alert=True)
+                return
+
+            try:
+                hours = int(hours_str[1:])
+                minutes = hours * 60
+
+                user_mapping = self.retracttrial_mappings.get(menu_id, {})
+                user_id_str = user_mapping.get(idx)
+
+                if not user_id_str or user_id_str not in AUTO_ROLE_CONFIG[
+                        'active_members']:
+                    await callback_query.answer("User not found.",
+                                                show_alert=True)
+                    return
+
+                member_data = AUTO_ROLE_CONFIG['active_members'][user_id_str]
+                old_expiry = datetime.fromisoformat(member_data['expiry_time'])
+                if old_expiry.tzinfo is None:
+                    old_expiry = AMSTERDAM_TZ.localize(old_expiry)
+
+                new_expiry = old_expiry - timedelta(minutes=minutes)
+                member_data['expiry_time'] = new_expiry.isoformat()
+
+                await self.save_auto_role_config()
+
+                await callback_query.message.edit_text(
+                    f"✅ Reduced trial by {hours}h for user {user_id_str}\n"
+                    f"New expiry: {new_expiry.strftime('%Y-%m-%d %H:%M')} (Amsterdam time)"
+                )
+                self.retracttrial_mappings.pop(menu_id, None)
+            except Exception as e:
+                await callback_query.answer(f"Error: {str(e)}", show_alert=True)
+
+        await callback_query.answer()
+
+    async def handle_cleartrial_callback(self, client: Client,
+                                         callback_query: CallbackQuery):
+        user_id = callback_query.from_user.id
+
+        if not await self.is_owner(user_id):
+            await callback_query.answer("This is restricted to the bot owner.",
+                                        show_alert=True)
+            return
+
+        data = callback_query.data
+
+        if not data.startswith("clrtrl_"):
+            return
+
+        parts = data.split("_")
+        if len(parts) < 3:
+            await callback_query.answer("Invalid callback data.",
+                                        show_alert=True)
+            return
+
+        menu_id = parts[1]
+        action_type = parts[2]
+
+        if not hasattr(self, 'cleartrial_mappings'):
+            self.cleartrial_mappings = {}
+
+        if action_type == "cancel":
+            self.cleartrial_mappings.pop(menu_id, None)
+            await callback_query.message.edit_text("Cancelled.")
+            await callback_query.answer()
+            return
+
+        if action_type == "custom":
+            self.cleartrial_mappings[menu_id] = {'waiting_for_id': True}
+            await callback_query.message.edit_text(
+                "**Enter Member ID**\n\n"
+                "Please reply with the member ID you want to clear from trial tracking."
+            )
+            await callback_query.answer()
+            return
+
+        if action_type == "select":
+            idx = parts[3] if len(parts) > 3 else None
+            if not idx:
+                await callback_query.answer("Invalid selection.",
+                                            show_alert=True)
+                return
+
+            user_mapping = self.cleartrial_mappings.get(menu_id, {})
+            selected_user_id_str = user_mapping.get(idx)
+
+            if not selected_user_id_str or selected_user_id_str == 'waiting_for_id':
+                await callback_query.answer("User not found.", show_alert=True)
+                return
+
+            await self._clear_user_from_trial(selected_user_id_str)
+            self.cleartrial_mappings.pop(menu_id, None)
+            await callback_query.message.edit_text(
+                f"✅ User {selected_user_id_str} removed from all trial tracking")
+            await callback_query.answer()
+            return
+
         await callback_query.answer()
 
     async def handle_retract_trial(self, client: Client, message: Message):
@@ -2012,14 +2296,15 @@ class TelegramTradingBot:
         buttons = []
 
         # Show first 20 active trial members
-        for idx, (user_id_str, member_data) in enumerate(list(
-                AUTO_ROLE_CONFIG['active_members'].items())[:20]):
+        for idx, (user_id_str, member_data) in enumerate(
+                list(AUTO_ROLE_CONFIG['active_members'].items())[:20]):
             user_mapping[str(idx)] = user_id_str
             expiry = datetime.fromisoformat(member_data.get('expiry_time', ''))
             if expiry.tzinfo is None:
                 expiry = AMSTERDAM_TZ.localize(expiry)
 
-            total_seconds = max(0, (expiry - datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)).total_seconds())
+            total_seconds = max(0, (expiry - datetime.now(
+                pytz.UTC).astimezone(AMSTERDAM_TZ)).total_seconds())
             hours = int(total_seconds // 3600)
             minutes = int((total_seconds % 3600) // 60)
 
@@ -2084,8 +2369,7 @@ class TelegramTradingBot:
             selected_user_id_str = user_mapping.get(idx)
 
             if not selected_user_id_str:
-                await callback_query.answer("User not found.",
-                                            show_alert=True)
+                await callback_query.answer("User not found.", show_alert=True)
                 return
 
             # Show time adjustment menu
@@ -2098,8 +2382,9 @@ class TelegramTradingBot:
                 ])
 
             buttons.append([
-                InlineKeyboardButton("Custom Hours/Minutes",
-                                     callback_data=f"retrt_{menu_id}_custom_{idx}")
+                InlineKeyboardButton(
+                    "Custom Hours/Minutes",
+                    callback_data=f"retrt_{menu_id}_custom_{idx}")
             ])
             buttons.append([
                 InlineKeyboardButton("Back",
@@ -2123,8 +2408,7 @@ class TelegramTradingBot:
             hours_str = parts[4] if len(parts) > 4 else None
 
             if not idx or not hours_str or not hours_str.startswith("h"):
-                await callback_query.answer("Invalid action.",
-                                            show_alert=True)
+                await callback_query.answer("Invalid action.", show_alert=True)
                 return
 
             try:
@@ -2184,8 +2468,7 @@ class TelegramTradingBot:
             selected_user_id_str = user_mapping.get(idx)
 
             if not selected_user_id_str:
-                await callback_query.answer("User not found.",
-                                            show_alert=True)
+                await callback_query.answer("User not found.", show_alert=True)
                 return
 
             # Ask for input - store the context
@@ -2222,8 +2505,7 @@ class TelegramTradingBot:
             time_str = parts[4] if len(parts) > 4 else None
 
             if not idx or not time_str:
-                await callback_query.answer("Invalid action.",
-                                            show_alert=True)
+                await callback_query.answer("Invalid action.", show_alert=True)
                 return
 
             user_mapping = self.retracttrial_mappings.get(menu_id, {})
@@ -2231,8 +2513,7 @@ class TelegramTradingBot:
 
             if not user_id_str or user_id_str not in AUTO_ROLE_CONFIG[
                     'active_members']:
-                await callback_query.answer("User not found.",
-                                            show_alert=True)
+                await callback_query.answer("User not found.", show_alert=True)
                 return
 
             try:
@@ -2295,8 +2576,8 @@ class TelegramTradingBot:
                     if expiry.tzinfo is None:
                         expiry = AMSTERDAM_TZ.localize(expiry)
 
-                    total_seconds = max(0, (expiry - datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)).
-                                    total_seconds())
+                    total_seconds = max(0, (expiry - datetime.now(
+                        pytz.UTC).astimezone(AMSTERDAM_TZ)).total_seconds())
                     hours = int(total_seconds // 3600)
                     minutes = int((total_seconds % 3600) // 60)
 
@@ -2321,76 +2602,124 @@ class TelegramTradingBot:
 
         await callback_query.answer()
 
-    async def handle_clear_member(self, client: Client, message: Message):
-        """Remove a user from all trial tracking tables (active_members, role_history, dm_schedule, weekend_pending)"""
-        if not await self.is_owner(message.from_user.id):
-            await message.reply(
-                "❌ This command can only be used by the bot owner.")
+
+    async def handle_cleartrial_callback(self, client: Client,
+                                         callback_query: CallbackQuery):
+        """Handle clear trial callback for user selection and clearing"""
+        user_id = callback_query.from_user.id
+
+        if not await self.is_owner(user_id):
+            await callback_query.answer("This is restricted to the bot owner.",
+                                        show_alert=True)
             return
 
-        try:
-            parts = message.text.split()
-            if len(parts) < 2:
-                await message.reply(
-                    "Usage: /clearmember <user_id>\n\nExample: /clearmember 5115200383"
-                )
+        data = callback_query.data
+
+        if not data.startswith("clrtrl_"):
+            return
+
+        parts = data.split("_")
+        if len(parts) < 3:
+            await callback_query.answer("Invalid callback data.",
+                                        show_alert=True)
+            return
+
+        menu_id = parts[1]
+        action_type = parts[2]
+
+        if not hasattr(self, 'cleartrial_mappings'):
+            self.cleartrial_mappings = {}
+
+        if action_type == "cancel":
+            self.cleartrial_mappings.pop(menu_id, None)
+            await callback_query.message.edit_text("Cancelled.")
+            await callback_query.answer()
+            return
+
+        if action_type == "custom":
+            self.cleartrial_mappings[menu_id] = {'waiting_for_id': True}
+            await callback_query.message.edit_text(
+                "**Enter Member ID**\n\n"
+                "Please reply with the member ID you want to clear from trial tracking."
+            )
+            await callback_query.answer()
+            return
+
+        if action_type == "select":
+            idx = parts[3] if len(parts) > 3 else None
+            if not idx:
+                await callback_query.answer("Invalid selection.",
+                                            show_alert=True)
                 return
 
-            user_id = parts[1]
-            user_id_str = str(user_id)
+            user_mapping = self.cleartrial_mappings.get(menu_id, {})
+            selected_user_id_str = user_mapping.get(idx)
 
-            # Remove from memory
-            AUTO_ROLE_CONFIG['active_members'].pop(user_id_str, None)
-            AUTO_ROLE_CONFIG['role_history'].pop(user_id_str, None)
-            AUTO_ROLE_CONFIG['dm_schedule'].pop(user_id_str, None)
-            AUTO_ROLE_CONFIG['weekend_pending'].pop(user_id_str, None)
+            if not selected_user_id_str or selected_user_id_str == 'waiting_for_id':
+                await callback_query.answer("User not found.", show_alert=True)
+                return
 
-            # Remove from database
+            # Clear the user from trial system
+            AUTO_ROLE_CONFIG['active_members'].pop(selected_user_id_str, None)
+            AUTO_ROLE_CONFIG['role_history'].pop(selected_user_id_str, None)
+            AUTO_ROLE_CONFIG['dm_schedule'].pop(selected_user_id_str, None)
+            AUTO_ROLE_CONFIG['weekend_pending'].pop(selected_user_id_str, None)
+
             if self.db_pool:
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute(
-                        "DELETE FROM active_members WHERE member_id = $1",
-                        int(user_id))
-                    await conn.execute(
-                        "DELETE FROM role_history WHERE member_id = $1",
-                        int(user_id))
-                    await conn.execute(
-                        "DELETE FROM dm_schedule WHERE member_id = $1",
-                        int(user_id))
-                    await conn.execute(
-                        "DELETE FROM weekend_pending WHERE member_id = $1",
-                        int(user_id))
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute(
+                            "DELETE FROM active_members WHERE member_id = $1",
+                            int(selected_user_id_str))
+                        await conn.execute(
+                            "DELETE FROM role_history WHERE member_id = $1",
+                            int(selected_user_id_str))
+                        await conn.execute(
+                            "DELETE FROM dm_schedule WHERE member_id = $1",
+                            int(selected_user_id_str))
+                        await conn.execute(
+                            "DELETE FROM weekend_pending WHERE member_id = $1",
+                            int(selected_user_id_str))
+                except Exception as e:
+                    logger.error(f"Error clearing user {selected_user_id_str} from database: {e}")
 
             await self.save_auto_role_config()
-            await message.reply(
-                f"✅ User {user_id} removed from all trial tracking")
+            self.cleartrial_mappings.pop(menu_id, None)
+            await callback_query.message.edit_text(
+                f"✅ User {selected_user_id_str} removed from all trial tracking")
+            await callback_query.answer()
+            return
 
-        except Exception as e:
-            await message.reply(f"Error: {str(e)}")
+        await callback_query.answer()
 
     async def process_join_request(self, client: Client,
                                    join_request: ChatJoinRequest):
         # Debug: always log that we received a join request
         chat_name = getattr(join_request.chat, 'title', 'Unknown')
-        logger.info(f"📨 Join request received from {join_request.from_user.first_name} (ID: {join_request.from_user.id}) in chat {chat_name} (ID: {join_request.chat.id})")
-        
+        logger.info(
+            f"📨 Join request received from {join_request.from_user.first_name} (ID: {join_request.from_user.id}) in chat {chat_name} (ID: {join_request.chat.id})"
+        )
+
         # Validate VIP_GROUP_ID
         if VIP_GROUP_ID == 0:
-            logger.error("❌ VIP_GROUP_ID not set! Join requests cannot be processed.")
+            logger.error(
+                "❌ VIP_GROUP_ID not set! Join requests cannot be processed.")
             return
-        
+
         if join_request.chat.id != VIP_GROUP_ID:
-            logger.debug(f"Join request is for different group (got {join_request.chat.id}, expected {VIP_GROUP_ID})")
+            logger.debug(
+                f"Join request is for different group (got {join_request.chat.id}, expected {VIP_GROUP_ID})"
+            )
             return
 
         try:
             user_id = join_request.from_user.id
             user_id_str = str(user_id)
             user_name = join_request.from_user.first_name or str(user_id)
-            
+
             # Check if user already used their trial BEFORE approving
             has_used_trial = user_id_str in AUTO_ROLE_CONFIG['role_history']
-            
+
             if not has_used_trial and self.db_pool:
                 try:
                     async with self.db_pool.acquire() as conn:
@@ -2401,18 +2730,21 @@ class TelegramTradingBot:
                             has_used_trial = True
                 except Exception as e:
                     logger.error(f"Error checking role_history: {e}")
-            
+
             # Reject if they already used trial
             if has_used_trial:
                 await self.log_to_debug(
-                    f"❌ Rejected join request from {user_name} (ID: {user_id}) - trial already used before")
-                
+                    f"❌ Rejected join request from {user_name} (ID: {user_id}) - trial already used before"
+                )
+
                 try:
                     await join_request.decline()
-                    logger.info(f"✅ Declined join request for {user_name} (ID: {user_id})")
+                    logger.info(
+                        f"✅ Declined join request for {user_name} (ID: {user_id})"
+                    )
                 except Exception as e:
                     logger.error(f"Error declining join request: {e}")
-                
+
                 # Send friendly DM about re-using trial
                 try:
                     rejection_dm = (
@@ -2420,25 +2752,32 @@ class TelegramTradingBot:
                         f"Unfortunately, our free trial can only be used once per person. Your trial has already ran out, so we can't give you another.\n\n"
                         f"We truly hope that you were able to profit with us during your free trial. If you were happy with the results you got, then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
                     )
-                    await client.send_message(user_id, rejection_dm, disable_web_page_preview=True)
+                    await client.send_message(user_id,
+                                              rejection_dm,
+                                              disable_web_page_preview=True)
                     logger.info(f"Sent rejection DM to {user_name}")
                 except Exception as e:
-                    logger.error(f"Could not send rejection DM to {user_name}: {e}")
+                    logger.error(
+                        f"Could not send rejection DM to {user_name}: {e}")
                 return
-            
+
             # Track this user as trial approval (they're joining via trial link with approval)
             self.trial_pending_approvals.add(user_id)
             logger.info(f"✅ Added {user_id} to trial_pending_approvals set")
-            
+
             # Actually approve the request
             await join_request.approve()
-            logger.info(f"✅ Successfully approved join request for {user_name} (ID: {user_id})")
-            
+            logger.info(
+                f"✅ Successfully approved join request for {user_name} (ID: {user_id})"
+            )
+
             await self.log_to_debug(
                 f"🎯 Auto-approved trial join request from {user_name} (ID: {user_id}) - waiting for member join event..."
             )
         except Exception as e:
-            logger.error(f"❌ Error processing join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}")
+            logger.error(
+                f"❌ Error processing join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}"
+            )
             await self.log_to_debug(
                 f"❌ Failed to process join request from {join_request.from_user.first_name} (ID: {join_request.from_user.id}): {e}"
             )
@@ -2552,15 +2891,18 @@ class TelegramTradingBot:
         # But as a safety check if they somehow made it here, send them a message and log it
         if has_used_trial:
             await self.log_to_debug(
-                f"⚠️ Warning: User {user.first_name} ({user.id}) joined despite trial already used - should have been rejected at join request")
+                f"⚠️ Warning: User {user.first_name} ({user.id}) joined despite trial already used - should have been rejected at join request"
+            )
 
             try:
                 rejection_dm = (
                     f"Hey {user.first_name}!\n\n"
                     f"Unfortunately, our free trial can only be used once per person. Your trial has already ran out, so we can't give you another.\n\n"
-                    f"We truly hope that you were able to profit with us during your free trial. If you were happy with the results you got, then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
+                    f"If you were happy with the results you got during our trial then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
                 )
-                await client.send_message(user.id, rejection_dm, disable_web_page_preview=True)
+                await client.send_message(user.id,
+                                          rejection_dm,
+                                          disable_web_page_preview=True)
             except Exception as e:
                 logger.error(f"Could not send DM to {user.first_name}: {e}")
 
@@ -3633,7 +3975,8 @@ class TelegramTradingBot:
                     created_at = datetime.fromisoformat(
                         created_at.replace('Z', '+00:00'))
                 if created_at is None:
-                    created_at = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                    created_at = datetime.now(
+                        pytz.UTC).astimezone(AMSTERDAM_TZ)
 
                 await conn.execute(
                     '''
@@ -3896,7 +4239,7 @@ class TelegramTradingBot:
                 expiry_msg = (
                     f"Hey! Your **3-day free access** to the VIP Group has unfortunately **ran out**. "
                     f"We truly hope you were able to benefit with us & we hope to see you back soon! "
-                    f"For now, feel free to continue following our trade signals in the Free Group: https://t.me/fxpippioneers\n\n"
+                    f"For now, feel free to continue following our trade signals in our Free Group: https://t.me/fxpippioneers\n\n"
                     f"**Want to rejoin the VIP Group? You can regain access through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
                 )
                 await self.app.send_message(int(member_id), expiry_msg)
@@ -4064,9 +4407,6 @@ class TelegramTradingBot:
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM delivery statistics"),
-                    BotCommand("retracttrial",
-                               "Retract trial minutes from user"),
-                    BotCommand("clearmember", "Remove user from trial system"),
                 ]
                 await self.app.set_bot_commands(
                     owner_commands,
@@ -4081,7 +4421,8 @@ class TelegramTradingBot:
             try:
                 if self.db_pool:
                     async with self.db_pool.acquire() as conn:
-                        current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                        current_time = datetime.now(
+                            pytz.UTC).astimezone(AMSTERDAM_TZ)
                         await conn.execute(
                             '''
                             INSERT INTO bot_status (id, last_online, heartbeat_time)
