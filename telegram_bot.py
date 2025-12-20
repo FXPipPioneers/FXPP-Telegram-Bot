@@ -2046,7 +2046,7 @@ class TelegramTradingBot:
 
         # Determine if this is a trial user or paid member
         is_trial_user = False
-        trial_link_indicator = "um_ug2wtkfpimdzk"  # Trial link hash
+        trial_link_indicator = "um_ug2wtkfpimdvk"  # Trial link hash (lowercase from https://t.me/+uM_Ug2wTKFpiMDVk)
         
         if invite_link:
             # Extract invite link safely
@@ -3625,6 +3625,10 @@ class TelegramTradingBot:
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM delivery statistics"),
+                    BotCommand("retracttrial",
+                               "Retract trial minutes from user"),
+                    BotCommand("clearmember",
+                               "Remove user from trial system"),
                 ]
                 await self.app.set_bot_commands(
                     owner_commands,
