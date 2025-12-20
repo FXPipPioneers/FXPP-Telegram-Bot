@@ -1135,6 +1135,79 @@ class TelegramTradingBot:
         if not await self.is_owner(user_id):
             return
 
+        # Handle retracttrial custom input
+        if not hasattr(self, 'awaiting_retracttrial_input'):
+            self.awaiting_retracttrial_input = {}
+        
+        if user_id in self.awaiting_retracttrial_input:
+            try:
+                context = self.awaiting_retracttrial_input.pop(user_id)
+                menu_id = context['menu_id']
+                idx = context['idx']
+                user_id_str = context['user_id_str']
+                
+                text = message.text.strip().lower()
+                total_minutes = 0
+                
+                # Parse input like "5h", "30m", "2h 15m", etc.
+                parts = text.split()
+                for part in parts:
+                    if 'h' in part:
+                        try:
+                            h = int(part.replace('h', ''))
+                            total_minutes += h * 60
+                        except ValueError:
+                            pass
+                    elif 'm' in part:
+                        try:
+                            m = int(part.replace('m', ''))
+                            total_minutes += m
+                        except ValueError:
+                            pass
+                
+                if total_minutes <= 0:
+                    await message.reply("Please enter a valid time (e.g., '5h' or '30m' or '2h 15m')")
+                    return
+                
+                if user_id_str not in AUTO_ROLE_CONFIG['active_members']:
+                    await message.reply("User not found in active trials.")
+                    return
+                
+                member_data = AUTO_ROLE_CONFIG['active_members'][user_id_str]
+                old_expiry = datetime.fromisoformat(member_data['expiry_time'])
+                if old_expiry.tzinfo is None:
+                    old_expiry = AMSTERDAM_TZ.localize(old_expiry)
+                
+                new_expiry = old_expiry - timedelta(minutes=total_minutes)
+                member_data['expiry_time'] = new_expiry.isoformat()
+                
+                # Update database
+                if self.db_pool:
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE active_members SET expiry_time = $1 WHERE member_id = $2",
+                            new_expiry, int(user_id_str))
+                
+                await self.save_auto_role_config()
+                self.retracttrial_mappings.pop(menu_id, None)
+                
+                hours = total_minutes // 60
+                mins = total_minutes % 60
+                if hours > 0 and mins > 0:
+                    label = f"{hours}h {mins}m"
+                elif hours > 0:
+                    label = f"{hours}h"
+                else:
+                    label = f"{mins}m"
+                
+                await message.reply(
+                    f"✅ Subtracted {label} from user {user_id_str}\n"
+                    f"New expiry: {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
+                return
+            except Exception as e:
+                await message.reply(f"Error: {str(e)}")
+                return
+
         if user_id in self.awaiting_custom_pair:
             pair = message.text.upper().strip()
             awaiting_data = self.awaiting_custom_pair.pop(user_id)
@@ -1905,11 +1978,13 @@ class TelegramTradingBot:
                     expiry = AMSTERDAM_TZ.localize(expiry)
 
                 time_left = expiry - current_time
-                hours_left = max(0, time_left.total_seconds() / 3600)
+                total_seconds = max(0, time_left.total_seconds())
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
 
                 weekend = " (weekend)" if data_item.get(
                     'weekend_delayed') else ""
-                response += f"User {member_id}: {hours_left:.1f}h left{weekend}\n"
+                response += f"User {member_id}: {hours}h {minutes}m left{weekend}\n"
 
             if len(AUTO_ROLE_CONFIG['active_members']) > 20:
                 response += f"\n_...and {len(AUTO_ROLE_CONFIG['active_members']) - 20} more_"
@@ -1944,11 +2019,13 @@ class TelegramTradingBot:
             if expiry.tzinfo is None:
                 expiry = AMSTERDAM_TZ.localize(expiry)
 
-            hours_left = max(0, (expiry - datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)).total_seconds() / 3600)
+            total_seconds = max(0, (expiry - datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)).total_seconds())
+            hours = int(total_seconds // 3600)
+            minutes = int((total_seconds % 3600) // 60)
 
             buttons.append([
                 InlineKeyboardButton(
-                    f"User {user_id_str} ({hours_left:.1f}h left)",
+                    f"User {user_id_str} ({hours}h {minutes}m left)",
                     callback_data=f"retrt_{menu_id}_select_{idx}")
             ])
 
@@ -2096,49 +2173,47 @@ class TelegramTradingBot:
             return
 
         if action_type == "custom":
-            # Handle custom hours/minutes selection
-            if len(parts) == 4:
-                # First custom click - show options
-                idx = parts[3] if len(parts) > 3 else None
-                if not idx:
-                    await callback_query.answer("Invalid selection.",
-                                                show_alert=True)
-                    return
+            # Handle custom hours/minutes input
+            idx = parts[3] if len(parts) > 3 else None
+            if not idx:
+                await callback_query.answer("Invalid selection.",
+                                            show_alert=True)
+                return
 
-                user_mapping = self.retracttrial_mappings.get(menu_id, {})
-                selected_user_id_str = user_mapping.get(idx)
+            user_mapping = self.retracttrial_mappings.get(menu_id, {})
+            selected_user_id_str = user_mapping.get(idx)
 
-                if not selected_user_id_str:
-                    await callback_query.answer("User not found.",
-                                                show_alert=True)
-                    return
+            if not selected_user_id_str:
+                await callback_query.answer("User not found.",
+                                            show_alert=True)
+                return
 
-                buttons = []
-                for hours in [1, 2, 4, 8, 12, 18, 24]:
-                    buttons.append([
-                        InlineKeyboardButton(
-                            f"{hours}h",
-                            callback_data=f"retrt_{menu_id}_applycustom_{idx}_h{hours}")
-                    ])
+            # Ask for input - store the context
+            if not hasattr(self, 'awaiting_retracttrial_input'):
+                self.awaiting_retracttrial_input = {}
 
-                buttons.append([
-                    InlineKeyboardButton("30 min",
-                                         callback_data=f"retrt_{menu_id}_applycustom_{idx}_m30"),
-                    InlineKeyboardButton("45 min",
-                                         callback_data=f"retrt_{menu_id}_applycustom_{idx}_m45")
-                ])
-                buttons.append([
-                    InlineKeyboardButton("Back",
-                                         callback_data=f"retrt_{menu_id}_back"),
-                    InlineKeyboardButton("Cancel",
-                                         callback_data=f"retrt_{menu_id}_cancel")
-                ])
+            self.awaiting_retracttrial_input[callback_query.from_user.id] = {
+                'menu_id': menu_id,
+                'idx': idx,
+                'user_id_str': selected_user_id_str
+            }
 
-                keyboard = InlineKeyboardMarkup(buttons)
-                await callback_query.message.edit_text(
-                    f"**Custom Time for {selected_user_id_str}**\n\nSelect amount to subtract:",
-                    reply_markup=keyboard)
-                await callback_query.answer()
+            buttons = [[
+                InlineKeyboardButton("Cancel",
+                                     callback_data=f"retrt_{menu_id}_cancel")
+            ]]
+            keyboard = InlineKeyboardMarkup(buttons)
+
+            await callback_query.message.edit_text(
+                f"**Custom Time for User {selected_user_id_str}**\n\n"
+                f"Send me the time to subtract.\n\n"
+                f"Examples:\n"
+                f"• `5h` (5 hours)\n"
+                f"• `30m` (30 minutes)\n"
+                f"• `2h 15m` (2 hours 15 minutes)\n\n"
+                f"Just type the number and unit (h or m).",
+                reply_markup=keyboard)
+            await callback_query.answer()
             return
 
         if action_type == "applycustom":
@@ -2220,12 +2295,14 @@ class TelegramTradingBot:
                     if expiry.tzinfo is None:
                         expiry = AMSTERDAM_TZ.localize(expiry)
 
-                    hours_left = max(0, (expiry - datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)).
-                                    total_seconds() / 3600)
+                    total_seconds = max(0, (expiry - datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)).
+                                    total_seconds())
+                    hours = int(total_seconds // 3600)
+                    minutes = int((total_seconds % 3600) // 60)
 
                     buttons.append([
                         InlineKeyboardButton(
-                            f"User {user_id_str} ({hours_left:.1f}h left)",
+                            f"User {user_id_str} ({hours}h {minutes}m left)",
                             callback_data=f"retrt_{menu_id}_select_{idx}")
                     ])
 
@@ -2308,7 +2385,46 @@ class TelegramTradingBot:
 
         try:
             user_id = join_request.from_user.id
+            user_id_str = str(user_id)
             user_name = join_request.from_user.first_name or str(user_id)
+            
+            # Check if user already used their trial BEFORE approving
+            has_used_trial = user_id_str in AUTO_ROLE_CONFIG['role_history']
+            
+            if not has_used_trial and self.db_pool:
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        db_history = await conn.fetchrow(
+                            "SELECT * FROM role_history WHERE member_id = $1",
+                            user_id)
+                        if db_history:
+                            has_used_trial = True
+                except Exception as e:
+                    logger.error(f"Error checking role_history: {e}")
+            
+            # Reject if they already used trial
+            if has_used_trial:
+                await self.log_to_debug(
+                    f"❌ Rejected join request from {user_name} (ID: {user_id}) - trial already used before")
+                
+                try:
+                    await join_request.decline()
+                    logger.info(f"✅ Declined join request for {user_name} (ID: {user_id})")
+                except Exception as e:
+                    logger.error(f"Error declining join request: {e}")
+                
+                # Send friendly DM about re-using trial
+                try:
+                    rejection_dm = (
+                        f"Hey {user_name}!\n\n"
+                        f"Unfortunately, our free trial can only be used once per person. Your trial has already ran out, so we can't give you another.\n\n"
+                        f"We truly hope that you were able to profit with us during your free trial. If you were happy with the results you got, then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
+                    )
+                    await client.send_message(user_id, rejection_dm, disable_web_page_preview=True)
+                    logger.info(f"Sent rejection DM to {user_name}")
+                except Exception as e:
+                    logger.error(f"Could not send rejection DM to {user_name}: {e}")
+                return
             
             # Track this user as trial approval (they're joining via trial link with approval)
             self.trial_pending_approvals.add(user_id)
@@ -2322,9 +2438,9 @@ class TelegramTradingBot:
                 f"🎯 Auto-approved trial join request from {user_name} (ID: {user_id}) - waiting for member join event..."
             )
         except Exception as e:
-            logger.error(f"❌ Error auto-approving join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}")
+            logger.error(f"❌ Error processing join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}")
             await self.log_to_debug(
-                f"❌ Failed to approve join request from {join_request.from_user.first_name} (ID: {join_request.from_user.id}): {e}"
+                f"❌ Failed to process join request from {join_request.from_user.first_name} (ID: {join_request.from_user.id}): {e}"
             )
 
     async def process_member_update(self, client: Client,
@@ -2432,26 +2548,23 @@ class TelegramTradingBot:
                 f"⚠️ Database check failed for {user.first_name} - allowing access but logging warning"
             )
 
-        # If user already used trial once, kick them immediately
+        # If user already used trial once, they shouldn't have gotten past join request approval
+        # But as a safety check if they somehow made it here, send them a message and log it
         if has_used_trial:
             await self.log_to_debug(
-                f"❌ Kicking {user.first_name} - trial already used before")
+                f"⚠️ Warning: User {user.first_name} ({user.id}) joined despite trial already used - should have been rejected at join request")
 
             try:
-                await client.send_message(
-                    user.id, f"**Trial Already Used**\n\n"
-                    f"You have already used your 3 trading days free trial.\n\n"
-                    f"To continue accessing the VIP Group, please subscribe:\nhttps://whop.com/gold-pioneer/gold-pioneer/"
+                rejection_dm = (
+                    f"Hey {user.first_name}!\n\n"
+                    f"Unfortunately, our free trial can only be used once per person. Your trial has already ran out, so we can't give you another.\n\n"
+                    f"We truly hope that you were able to profit with us during your free trial. If you were happy with the results you got, then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
                 )
+                await client.send_message(user.id, rejection_dm, disable_web_page_preview=True)
             except Exception as e:
                 logger.error(f"Could not send DM to {user.first_name}: {e}")
 
-            try:
-                await client.ban_chat_member(VIP_GROUP_ID, user.id)
-                await asyncio.sleep(1)
-                await client.unban_chat_member(VIP_GROUP_ID, user.id)
-            except Exception as e:
-                logger.error(f"Error kicking user {user.first_name}: {e}")
+            # Don't kick - they should have been rejected at join request stage
             return
 
         # New trial user - register for 3-day trial
