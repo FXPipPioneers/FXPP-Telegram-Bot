@@ -354,6 +354,10 @@ class TelegramTradingBot:
         async def retract_trial_command(client, message: Message):
             await self.handle_retract_trial(client, message)
 
+        @self.app.on_message(filters.command("clearmember"))
+        async def clear_member_command(client, message: Message):
+            await self.handle_clear_member(client, message)
+
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
             await self.process_join_request(client, join_request)
@@ -1934,6 +1938,40 @@ class TelegramTradingBot:
         except Exception as e:
             await message.reply(f"Error: {str(e)}")
 
+    async def handle_clear_member(self, client: Client, message: Message):
+        """Remove a user from all trial tracking tables (active_members, role_history, dm_schedule, weekend_pending)"""
+        if not await self.is_owner(message.from_user.id):
+            return
+
+        try:
+            parts = message.text.split()
+            if len(parts) < 2:
+                await message.reply("Usage: /clearmember <user_id>\n\nExample: /clearmember 5115200383")
+                return
+
+            user_id = parts[1]
+            user_id_str = str(user_id)
+
+            # Remove from memory
+            AUTO_ROLE_CONFIG['active_members'].pop(user_id_str, None)
+            AUTO_ROLE_CONFIG['role_history'].pop(user_id_str, None)
+            AUTO_ROLE_CONFIG['dm_schedule'].pop(user_id_str, None)
+            AUTO_ROLE_CONFIG['weekend_pending'].pop(user_id_str, None)
+
+            # Remove from database
+            if self.db_pool:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute("DELETE FROM active_members WHERE member_id = $1", int(user_id))
+                    await conn.execute("DELETE FROM role_history WHERE member_id = $1", int(user_id))
+                    await conn.execute("DELETE FROM dm_schedule WHERE member_id = $1", int(user_id))
+                    await conn.execute("DELETE FROM weekend_pending WHERE member_id = $1", int(user_id))
+
+            await self.save_auto_role_config()
+            await message.reply(f"✅ User {user_id} removed from all trial tracking")
+
+        except Exception as e:
+            await message.reply(f"Error: {str(e)}")
+
     async def process_join_request(self, client: Client,
                                    join_request: ChatJoinRequest):
         if join_request.chat.id != VIP_GROUP_ID:
@@ -1999,49 +2037,44 @@ class TelegramTradingBot:
                 f"Could not send welcome DM to {user.first_name}: {e}")
 
     async def handle_vip_group_join(self, client: Client, user, invite_link):
+        """
+        Handle VIP group joins. Only register trial users (those joining via trial link).
+        Paid members joining via main Whop link are not registered/tracked.
+        """
         user_id_str = str(user.id)
         current_time = datetime.now(AMSTERDAM_TZ)
 
-        used_trial_link = False
+        # Determine if this is a trial user or paid member
+        is_trial_user = False
+        trial_link_indicator = "um_ug2wtkfpimdzk"  # Trial link hash
+        
         if invite_link:
-            # Extract invite link string from object
+            # Extract invite link safely
             invite_link_str = ""
-            if hasattr(invite_link, 'invite_link'):
-                invite_link_str = str(invite_link.invite_link)
-            elif hasattr(invite_link, 'link'):
-                invite_link_str = str(invite_link.link)
-            else:
-                invite_link_str = str(invite_link)
+            try:
+                if hasattr(invite_link, 'invite_link'):
+                    invite_link_str = str(invite_link.invite_link).lower()
+                elif hasattr(invite_link, 'link'):
+                    invite_link_str = str(invite_link.link).lower()
+                else:
+                    invite_link_str = str(invite_link).lower()
+            except:
+                pass
             
-            # Normalize for comparison
-            invite_link_str = invite_link_str.strip().lower()
-            trial_link_hash = "um_ug2wtkfpimdzk"
-            
+            # Check if trial link
+            if trial_link_indicator in invite_link_str:
+                is_trial_user = True
+        
+        # If not trial user, don't register - they're paying members
+        if not is_trial_user:
             await self.log_to_debug(
-                f"DEBUG: VIP join detected - invite_link_str = '{invite_link_str}' | Checking against trial hash: {trial_link_hash}"
-            )
-            
-            # Check if this is the trial link
-            if invite_link_str and trial_link_hash in invite_link_str:
-                used_trial_link = True
-                await self.log_to_debug(
-                    f"✅ Trial link DETECTED for {user.first_name} (ID: {user.id})"
-                )
-        else:
-            await self.log_to_debug(
-                f"DEBUG: {user.first_name} (ID: {user.id}) joined with NO invite_link data"
-            )
-
-        if not used_trial_link:
-            await self.log_to_debug(
-                f"{user.first_name} (ID: {user.id}) joined VIP via non-trial link - treating as paid member"
-            )
+                f"💳 {user.first_name} (ID: {user.id}) joined via paid link - no trial registration needed")
             return
 
         await self.log_to_debug(
-            f"{user.first_name} (ID: {user.id}) joined VIP via TRIAL link - processing trial"
-        )
+            f"🆓 Trial join detected: {user.first_name} (ID: {user.id})")
 
+        # Check if this user has already used their trial
         has_used_trial = user_id_str in AUTO_ROLE_CONFIG['role_history']
         db_check_failed = False
 
@@ -2069,12 +2102,13 @@ class TelegramTradingBot:
 
         if db_check_failed:
             await self.log_to_debug(
-                f"Database check failed for {user.first_name} - allowing access but logging warning"
+                f"⚠️ Database check failed for {user.first_name} - allowing access but logging warning"
             )
 
+        # If user already used trial once, kick them immediately
         if has_used_trial:
             await self.log_to_debug(
-                f"Kicking {user.first_name} - already used trial")
+                f"❌ Kicking {user.first_name} - trial already used before")
 
             try:
                 await client.send_message(
@@ -2092,6 +2126,10 @@ class TelegramTradingBot:
             except Exception as e:
                 logger.error(f"Error kicking user {user.first_name}: {e}")
             return
+
+        # New trial user - register for 3-day trial
+        await self.log_to_debug(
+            f"✅ Registering {user.first_name} for 3-day trial")
 
         # Calculate expiry time to ensure exactly 3 trading days
         expiry_time = self.calculate_trial_expiry_time(current_time)
