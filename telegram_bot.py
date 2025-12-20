@@ -2835,15 +2835,28 @@ class TelegramTradingBot:
             f"**Activate your free trial here:** https://t.me/+uM_Ug2wTKFpiMDVk\n\n"
             f"Good luck trading!")
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
 
         try:
             await client.send_message(user.id, welcome_dm)
             await self.log_to_debug(
                 f"Sent welcome DM to {user.first_name} about VIP trial")
         except Exception as e:
-            logger.error(
-                f"Could not send welcome DM to {user.first_name}: {e}")
+            error_str = str(e)
+            if "PEER_ID_INVALID" in error_str:
+                logger.warning(
+                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Will retry after delay.")
+                await asyncio.sleep(10)
+                try:
+                    await client.send_message(user.id, welcome_dm)
+                    await self.log_to_debug(
+                        f"Sent welcome DM to {user.first_name} after retry")
+                except Exception as retry_error:
+                    logger.error(
+                        f"Could not send welcome DM to {user.first_name} after retry: {retry_error}")
+            else:
+                logger.error(
+                    f"Could not send welcome DM to {user.first_name}: {e}")
 
     async def handle_vip_group_join(self, client: Client, user, invite_link):
         """
@@ -2956,8 +2969,21 @@ class TelegramTradingBot:
         try:
             await client.send_message(user.id, welcome_msg)
         except Exception as e:
-            logger.error(
-                f"Could not send welcome DM to {user.first_name}: {e}")
+            error_str = str(e)
+            if "PEER_ID_INVALID" in error_str:
+                logger.warning(
+                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Will retry after delay.")
+                await asyncio.sleep(10)
+                try:
+                    await client.send_message(user.id, welcome_msg)
+                    await self.log_to_debug(
+                        f"Sent welcome DM to {user.first_name} after retry")
+                except Exception as retry_error:
+                    logger.error(
+                        f"Could not send welcome DM to {user.first_name} after retry: {retry_error}")
+            else:
+                logger.error(
+                    f"Could not send welcome DM to {user.first_name}: {e}")
 
     async def get_working_api_for_pair(self, pair: str) -> str:
         pair_clean = pair.upper().replace("/",
