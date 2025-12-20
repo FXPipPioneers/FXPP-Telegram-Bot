@@ -403,6 +403,16 @@ class TelegramTradingBot:
         async def group_message_handler(client, message: Message):
             await self.handle_group_message(client, message)
 
+        @self.app.on_message(filters.group & filters.service)
+        async def delete_service_messages(client, message: Message):
+            """Auto-delete join/leave service messages from VIP and FREE groups"""
+            if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
+                try:
+                    if message.new_chat_members or message.left_chat_member:
+                        await message.delete()
+                except Exception as e:
+                    logger.debug(f"Could not delete service message: {e}")
+
     async def is_owner(self, user_id: int) -> bool:
         """Check if user is the bot owner"""
         if BOT_OWNER_USER_ID == 0:
