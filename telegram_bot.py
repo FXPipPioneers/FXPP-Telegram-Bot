@@ -1882,6 +1882,8 @@ class TelegramTradingBot:
             f"**Activate your free trial here:** https://t.me/+uM_Ug2wTKFpiMDVk\n\n"
             f"Good luck trading!")
 
+        await asyncio.sleep(5)
+
         try:
             await client.send_message(user.id, welcome_dm)
             await self.log_to_debug(
