@@ -361,6 +361,9 @@ class TelegramTradingBot:
         async def timed_auto_role_command(client, message: Message):
             await self.handle_timed_auto_role(client, message)
 
+        @self.app.on_message(filters.command("sendwelcomedm"))
+        async def send_welcome_dm_command(client, message: Message):
+            await self.handle_send_welcome_dm(client, message)
 
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
@@ -396,17 +399,27 @@ class TelegramTradingBot:
         async def cleartrial_callback(client, callback_query: CallbackQuery):
             await self.handle_cleartrial_callback(client, callback_query)
 
+        @self.app.on_callback_query(filters.regex("^swdm_"))
+        async def sendwelcomedm_callback(client, callback_query: CallbackQuery):
+            await self.handle_sendwelcomedm_callback(client, callback_query)
+
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "freetrialusers"
+                "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm"
             ]))
         async def text_input_handler(client, message: Message):
+            # Check if this is a response to sendwelcomedm widget
+            if message.reply_to_message:
+                if "Enter User ID" in message.reply_to_message.text:
+                    await self.handle_sendwelcomedm_user_input(client, message)
+                    return
+            
             await self.handle_text_input(client, message)
 
         @self.app.on_message(filters.group & filters.text & ~filters.command([
             "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
-            "dmstatus", "freetrialusers"
+            "dmstatus", "freetrialusers", "sendwelcomedm"
         ]))
         async def group_message_handler(client, message: Message):
             await self.handle_group_message(client, message)
@@ -419,6 +432,50 @@ class TelegramTradingBot:
                     await message.delete()
                 except Exception as e:
                     logger.debug(f"Could not delete service message: {e}")
+
+        @self.app.on_message(filters=filters.group)
+        async def handle_group_reaction_update(client, message: Message):
+            """Track emoji reactions in free group for engagement scoring"""
+            if message.chat.id != FREE_GROUP_ID or not message.reactions:
+                return
+            
+            if not self.db_pool:
+                return
+            
+            try:
+                asyncio.create_task(self._fetch_and_store_reactions(message))
+            except Exception as e:
+                logger.debug(f"Error scheduling reaction fetch: {e}")
+
+    async def _fetch_and_store_reactions(self, message: Message):
+        """Fetch actual users who reacted and store individually for engagement tracking"""
+        try:
+            if not message.reactions or not self.db_pool:
+                return
+            
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            
+            # For each reaction on the message, fetch users who reacted
+            async with self.db_pool.acquire() as conn:
+                for reaction in message.reactions:
+                    emoji_str = str(reaction.emoji) if hasattr(reaction, 'emoji') else str(reaction)
+                    
+                    try:
+                        # Get list of users who reacted with this emoji
+                        async for reactor in self.app.get_reaction_users(
+                            FREE_GROUP_ID, message.id, emoji_str):
+                            
+                            # Store INDIVIDUAL user reaction
+                            await conn.execute(
+                                '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
+                                   VALUES ($1, $2, $3, $4)
+                                   ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
+                                reactor.id, message.id, emoji_str, current_time
+                            )
+                    except Exception as e:
+                        logger.debug(f"Error fetching reactors for emoji {emoji_str}: {e}")
+        except Exception as e:
+            logger.debug(f"Error storing reactions: {e}")
 
     async def is_owner(self, user_id: int) -> bool:
         """Check if user is the bot owner"""
@@ -676,14 +733,18 @@ class TelegramTradingBot:
             logger.error(f"Error parsing signal message: {e}")
             return None
 
-    async def log_to_debug(self, message: str):
+    async def log_to_debug(self, message: str, is_error: bool = False):
         if DEBUG_GROUP_ID:
             try:
-                await self.app.send_message(DEBUG_GROUP_ID,
-                                            f"**Bot Log:** {message}")
+                if is_error:
+                    msg_text = f"🚨 **ERROR:** {message}\n\n@fx_pippioneers"
+                else:
+                    msg_text = f"**Bot Log:** {message}"
+                await self.app.send_message(DEBUG_GROUP_ID, msg_text)
             except Exception as e:
                 logger.error(f"Failed to send debug log: {e}")
-        logger.info(message)
+        log_level = logging.ERROR if is_error else logging.INFO
+        logger.log(log_level, message)
 
     def is_weekend_time(self, check_time: datetime) -> bool:
         if PYTZ_AVAILABLE:
@@ -1959,6 +2020,207 @@ class TelegramTradingBot:
         except Exception as e:
             await message.reply(f"Error fetching DM status: {str(e)}")
 
+    async def handle_send_welcome_dm(self, client: Client, message: Message):
+        """Owner-only widget to manually send welcome DMs to users"""
+        if not await self.is_owner(message.from_user.id):
+            await message.reply("This command is restricted to the bot owner.")
+            return
+
+        # Store context for this menu session
+        menu_id = f"swdm_{int(time.time() * 1000)}"
+        if not hasattr(self, 'sendwelcomedm_context'):
+            self.sendwelcomedm_context = {}
+        
+        self.sendwelcomedm_context[menu_id] = {
+            'stage': 'waiting_for_user_id',
+            'user_id': None,
+            'msg_type': None
+        }
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 Enter User ID", callback_data=f"swdm_{menu_id}_input")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"swdm_{menu_id}_cancel")]
+        ])
+
+        await message.reply(
+            "**Send Welcome DM Widget**\n\n"
+            "Click **Enter User ID** to start sending a welcome message to a user.",
+            reply_markup=keyboard
+        )
+
+    async def handle_sendwelcomedm_callback(self, client: Client, callback_query: CallbackQuery):
+        """Handle sendwelcomedm widget callbacks"""
+        user_id = callback_query.from_user.id
+        
+        if not await self.is_owner(user_id):
+            await callback_query.answer("This is restricted to the bot owner.", show_alert=True)
+            return
+
+        data = callback_query.data
+        if not data.startswith("swdm_"):
+            return
+
+        parts = data.split("_")
+        if len(parts) < 3:
+            await callback_query.answer("Invalid callback data.", show_alert=True)
+            return
+
+        menu_id = parts[1]
+        action = parts[2] if len(parts) > 2 else ""
+
+        if not hasattr(self, 'sendwelcomedm_context'):
+            self.sendwelcomedm_context = {}
+
+        context = self.sendwelcomedm_context.get(menu_id, {})
+
+        # Cancel button
+        if action == "cancel":
+            self.sendwelcomedm_context.pop(menu_id, None)
+            await callback_query.message.edit_text("❌ Cancelled.")
+            await callback_query.answer()
+            return
+
+        # Input button - ask for user ID
+        if action == "input":
+            context['stage'] = 'waiting_for_user_id'
+            self.sendwelcomedm_context[menu_id] = context
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"swdm_{menu_id}_cancel")]
+            ])
+
+            await callback_query.message.edit_text(
+                "**Enter User ID**\n\n"
+                "Reply to this message with the Telegram user ID (numeric only).",
+                reply_markup=keyboard
+            )
+            await callback_query.answer()
+            return
+
+        # Message type selection
+        if action == "select_type":
+            msg_type = parts[3] if len(parts) > 3 else ""
+            if msg_type not in ["vip_trial", "free_group"]:
+                await callback_query.answer("Invalid message type.", show_alert=True)
+                return
+
+            context['msg_type'] = msg_type
+            context['stage'] = 'confirmed'
+            self.sendwelcomedm_context[menu_id] = context
+
+            # Execute the send
+            await self.execute_send_welcome_dm(callback_query, menu_id, context)
+            return
+
+        await callback_query.answer()
+
+    async def handle_sendwelcomedm_user_input(self, client: Client, message: Message):
+        """Handle user ID input for sendwelcomedm widget"""
+        if not await self.is_owner(message.from_user.id):
+            return
+
+        try:
+            user_id = int(message.text.strip())
+            
+            # Find the context for this user
+            if not hasattr(self, 'sendwelcomedm_context'):
+                return
+            
+            # Find the active menu
+            menu_id = None
+            for mid, ctx in self.sendwelcomedm_context.items():
+                if ctx.get('stage') == 'waiting_for_user_id':
+                    menu_id = mid
+                    break
+            
+            if not menu_id:
+                await message.reply("No active sendwelcomedm session found.")
+                return
+            
+            context = self.sendwelcomedm_context[menu_id]
+            context['user_id'] = user_id
+            context['stage'] = 'selecting_type'
+            self.sendwelcomedm_context[menu_id] = context
+
+            # Show message type selection
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎁 VIP Trial (3 days)", callback_data=f"swdm_{menu_id}_select_type_vip_trial")],
+                [InlineKeyboardButton("👥 Free Group", callback_data=f"swdm_{menu_id}_select_type_free_group")],
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"swdm_{menu_id}_cancel")]
+            ])
+
+            await message.reply(
+                f"**User ID:** `{user_id}`\n\n"
+                f"**Select message type:**",
+                reply_markup=keyboard
+            )
+        except ValueError:
+            await message.reply("Invalid user ID. Please provide a numeric ID only.")
+
+    async def execute_send_welcome_dm(self, callback_query: CallbackQuery, menu_id: str, context: dict):
+        """Execute the actual welcome DM send"""
+        user_id = context.get('user_id')
+        msg_type = context.get('msg_type')
+
+        if not user_id or not msg_type:
+            await callback_query.message.edit_text("❌ Missing user ID or message type.")
+            await callback_query.answer()
+            self.sendwelcomedm_context.pop(menu_id, None)
+            return
+
+        # Prepare the welcome message
+        if msg_type == "vip_trial":
+            welcome_msg = (
+                f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
+                f"**access to the VIP Group for 3 trading days.** "
+                f"Your access will expire on **Wednesday at 22:59**. "
+                f"Good luck trading!"
+            )
+        else:  # free_group
+            welcome_msg = (
+                f"**Hey, Welcome to FX Pip Pioneers!**\n\n"
+                f"**Want to try our VIP Group for FREE?**\n"
+                f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
+                f"**6+ high-quality trade signals per day**.\n\n"
+                f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
+                f"Good luck trading!"
+            )
+
+        # Try to send the message
+        try:
+            # Resolve peer first
+            await self.app.get_users([user_id])
+            await asyncio.sleep(1)
+            await self.app.send_message(user_id, welcome_msg)
+            await callback_query.message.edit_text(
+                f"✅ **Success!**\n\n"
+                f"Welcome DM sent to user **{user_id}**\n"
+                f"Type: **{msg_type}**"
+            )
+            await self.log_to_debug(f"Owner sent {msg_type} welcome DM to user {user_id} via /sendwelcomedm widget")
+        except Exception as e:
+            error_str = str(e)
+            if "PEER_ID_INVALID" in error_str or "UserIsBlocked" in error_str:
+                # Add to retry queue
+                await self.track_failed_welcome_dm(user_id, f"User {user_id}", msg_type, welcome_msg)
+                await callback_query.message.edit_text(
+                    f"⚠️ **Peer Not Ready**\n\n"
+                    f"Could not send immediately, but added to retry queue.\n\n"
+                    f"The bot will automatically retry every 2 minutes (up to 5 attempts).\n\n"
+                    f"User ID: `{user_id}`"
+                )
+                await self.log_to_debug(f"Added user {user_id} to welcome DM retry queue via /sendwelcomedm widget", is_error=True)
+            else:
+                await callback_query.message.edit_text(
+                    f"❌ **Error**\n\n"
+                    f"Could not send DM to user **{user_id}**\n\n"
+                    f"Error: `{error_str[:100]}`"
+                )
+                await self.log_to_debug(f"Error sending welcome DM to user {user_id}: {error_str}", is_error=True)
+        
+        await callback_query.answer()
+        self.sendwelcomedm_context.pop(menu_id, None)
+
     async def handle_timed_auto_role(self, client: Client, message: Message):
         if not await self.is_owner(message.from_user.id):
             return
@@ -2840,6 +3102,19 @@ class TelegramTradingBot:
         await self.log_to_debug(
             f"New member joined FREE group: {user.first_name} (ID: {user.id})")
 
+        # Track free group join for engagement tracking
+        if self.db_pool:
+            try:
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute(
+                        '''INSERT INTO free_group_joins (user_id, joined_at, discount_sent)
+                           VALUES ($1, $2, FALSE)
+                           ON CONFLICT (user_id) DO NOTHING''',
+                        user.id, current_time)
+            except Exception as e:
+                logger.error(f"Error tracking free group join for {user.id}: {e}")
+
         welcome_dm = (
             f"**Hey {user.first_name}, Welcome to FX Pip Pioneers!**\n\n"
             f"**Want to try our VIP Group for FREE?**\n"
@@ -2848,7 +3123,7 @@ class TelegramTradingBot:
             f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!")
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(20)
 
         try:
             await client.send_message(user.id, welcome_dm)
@@ -2858,18 +3133,26 @@ class TelegramTradingBot:
             error_str = str(e)
             if "PEER_ID_INVALID" in error_str:
                 logger.warning(
-                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Will retry after delay.")
-                await asyncio.sleep(10)
+                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Resolving peer...")
                 try:
+                    # Resolve the peer connection first
+                    await client.get_users([user.id])
+                    await asyncio.sleep(2)
                     await client.send_message(user.id, welcome_dm)
                     await self.log_to_debug(
-                        f"Sent welcome DM to {user.first_name} after retry")
+                        f"Sent welcome DM to {user.first_name} after peer resolution")
                 except Exception as retry_error:
-                    logger.error(
-                        f"Could not send welcome DM to {user.first_name} after retry: {retry_error}")
+                    error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {retry_error}"
+                    logger.error(error_msg)
+                    await self.log_to_debug(error_msg, is_error=True)
+                    # Track for retry
+                    await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
             else:
-                logger.error(
-                    f"Could not send welcome DM to {user.first_name}: {e}")
+                error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
+                logger.error(error_msg)
+                await self.log_to_debug(error_msg, is_error=True)
+                # Track for retry
+                await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
 
     async def handle_vip_group_join(self, client: Client, user, invite_link):
         """
@@ -2985,18 +3268,26 @@ class TelegramTradingBot:
             error_str = str(e)
             if "PEER_ID_INVALID" in error_str:
                 logger.warning(
-                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Will retry after delay.")
-                await asyncio.sleep(10)
+                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Resolving peer...")
                 try:
+                    # Resolve the peer connection first
+                    await client.get_users([user.id])
+                    await asyncio.sleep(2)
                     await client.send_message(user.id, welcome_msg)
                     await self.log_to_debug(
-                        f"Sent welcome DM to {user.first_name} after retry")
+                        f"Sent welcome DM to {user.first_name} after peer resolution")
                 except Exception as retry_error:
-                    logger.error(
-                        f"Could not send welcome DM to {user.first_name} after retry: {retry_error}")
+                    error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {retry_error}"
+                    logger.error(error_msg)
+                    await self.log_to_debug(error_msg, is_error=True)
+                    # Track for retry
+                    await self.track_failed_welcome_dm(user.id, user.first_name, "vip_trial", welcome_msg)
             else:
-                logger.error(
-                    f"Could not send welcome DM to {user.first_name}: {e}")
+                error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
+                logger.error(error_msg)
+                await self.log_to_debug(error_msg, is_error=True)
+                # Track for retry
+                await self.track_failed_welcome_dm(user.id, user.first_name, "vip_trial", welcome_msg)
 
     async def get_working_api_for_pair(self, pair: str) -> str:
         pair_clean = pair.upper().replace("/",
@@ -3653,6 +3944,38 @@ class TelegramTradingBot:
                     )
                 ''')
 
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS emoji_reactions (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        message_id BIGINT NOT NULL,
+                        emoji VARCHAR(10) NOT NULL,
+                        reaction_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        UNIQUE(user_id, message_id, emoji)
+                    )
+                ''')
+
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS free_group_joins (
+                        user_id BIGINT PRIMARY KEY,
+                        joined_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                        discount_sent BOOLEAN DEFAULT FALSE
+                    )
+                ''')
+
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS pending_welcome_dms (
+                        user_id BIGINT PRIMARY KEY,
+                        first_name VARCHAR(255) NOT NULL,
+                        message_type VARCHAR(20) NOT NULL,
+                        message_content TEXT NOT NULL,
+                        failed_attempts INT DEFAULT 0,
+                        last_attempt TIMESTAMP WITH TIME ZONE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                ''')
+
             logger.info("Database tables initialized")
 
             await self.load_config_from_db()
@@ -4203,11 +4526,7 @@ class TelegramTradingBot:
                 continue
 
         if offline_hits_found > 0:
-            await self.log_to_debug(
-                f"Found and processed {offline_hits_found} TP/SL hits that occurred while offline"
-            )
-        else:
-            await self.log_to_debug("No offline TP/SL hits detected")
+            logger.info(f"Found and processed {offline_hits_found} TP/SL hits that occurred while offline")
 
     async def price_tracking_loop(self):
         await asyncio.sleep(10)
@@ -4255,7 +4574,7 @@ class TelegramTradingBot:
                     await self.expire_trial(member_id)
 
             except Exception as e:
-                logger.error(f"Error in trial expiry loop: {e}")
+                await self.log_to_debug(f"Error in trial expiry loop: {e}", is_error=True)
 
             await asyncio.sleep(60)
 
@@ -4299,10 +4618,47 @@ class TelegramTradingBot:
                 logger.error(f"Could not send expiry DM to {member_id}: {e}")
 
             await self.save_auto_role_config()
-            await self.log_to_debug(f"Trial expired for user {member_id}")
+            logger.info(f"Trial expired for user {member_id}")
 
         except Exception as e:
             logger.error(f"Error expiring trial for {member_id}: {e}")
+
+    async def preexpiration_warning_loop(self):
+        await asyncio.sleep(60)
+
+        while self.running:
+            try:
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+
+                for member_id, data in list(
+                        AUTO_ROLE_CONFIG['active_members'].items()):
+                    expiry_time = datetime.fromisoformat(data['expiry_time'])
+                    if expiry_time.tzinfo is None:
+                        expiry_time = AMSTERDAM_TZ.localize(expiry_time)
+
+                    time_until_expiry = expiry_time - current_time
+                    hours_left = time_until_expiry.total_seconds() / 3600
+
+                    # Initialize warning tracking if not present
+                    if 'warning_24h_sent' not in data:
+                        data['warning_24h_sent'] = False
+                    if 'warning_3h_sent' not in data:
+                        data['warning_3h_sent'] = False
+
+                    # Send 24-hour warning
+                    if not data['warning_24h_sent'] and 23 < hours_left <= 24:
+                        await self.send_24hr_warning(member_id)
+                        data['warning_24h_sent'] = True
+
+                    # Send 3-hour warning
+                    if not data['warning_3h_sent'] and 2.9 < hours_left <= 3:
+                        await self.send_3hr_warning(member_id)
+                        data['warning_3h_sent'] = True
+
+            except Exception as e:
+                await self.log_to_debug(f"Error in preexpiration warning loop: {e}", is_error=True)
+
+            await asyncio.sleep(600)
 
     async def followup_dm_loop(self):
         await asyncio.sleep(300)
@@ -4345,7 +4701,7 @@ class TelegramTradingBot:
                             'dm_14_sent'] = True
 
             except Exception as e:
-                logger.error(f"Error in followup DM loop: {e}")
+                await self.log_to_debug(f"Error in followup DM loop: {e}", is_error=True)
 
             await asyncio.sleep(3600)
 
@@ -4361,11 +4717,98 @@ class TelegramTradingBot:
         except Exception:
             return False
 
+    async def send_24hr_warning(self, member_id: str):
+        try:
+            message = (
+                f"⏰ **REMINDER! Your 3-day free trial for our VIP Group will expire in 24 hours**.\n\n"
+                f"After that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
+            )
+            await self.app.send_message(int(member_id), message)
+            logger.info(f"Sent 24-hour warning DM to user {member_id}")
+        except Exception as e:
+            await self.log_to_debug(f"Could not send 24-hour warning to {member_id}: {e}", is_error=True)
+
+    async def send_3hr_warning(self, member_id: str):
+        try:
+            message = (
+                f"⏰ **FINAL REMINDER! Your 3-day free trial for our VIP Group will expire in just 3 hours**.\n\n"
+                f"You're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and get permanent access to our VIP Group.\n\n"
+                f"**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
+            )
+            await self.app.send_message(int(member_id), message)
+            logger.info(f"Sent 3-hour warning DM to user {member_id}")
+        except Exception as e:
+            await self.log_to_debug(f"Could not send 3-hour warning to {member_id}: {e}", is_error=True)
+
+    async def track_failed_welcome_dm(self, user_id: int, first_name: str, msg_type: str, message_content: str):
+        """Track a failed welcome DM for retry"""
+        if not self.db_pool:
+            return
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO pending_welcome_dms (user_id, first_name, message_type, message_content, failed_attempts, last_attempt)
+                    VALUES ($1, $2, $3, $4, 1, NOW())
+                    ON CONFLICT (user_id) DO UPDATE SET
+                    failed_attempts = failed_attempts + 1,
+                    last_attempt = NOW()
+                ''', user_id, first_name, msg_type, message_content)
+        except Exception as e:
+            logger.error(f"Error tracking failed welcome DM for {user_id}: {e}")
+
+    async def retry_failed_welcome_dms_loop(self):
+        """Retry failed welcome DMs every 2 minutes"""
+        await asyncio.sleep(60)
+        
+        while self.running:
+            try:
+                if not self.db_pool:
+                    await asyncio.sleep(120)
+                    continue
+                
+                async with self.db_pool.acquire() as conn:
+                    pending = await conn.fetch('SELECT * FROM pending_welcome_dms ORDER BY created_at ASC LIMIT 10')
+                    
+                    for row in pending:
+                        user_id = row['user_id']
+                        first_name = row['first_name']
+                        message_content = row['message_content']
+                        failed_attempts = row['failed_attempts']
+                        
+                        # Skip if too many attempts (> 5)
+                        if failed_attempts > 5:
+                            await conn.execute('DELETE FROM pending_welcome_dms WHERE user_id = $1', user_id)
+                            await self.log_to_debug(f"Gave up retrying welcome DM to {first_name} (ID: {user_id}) after {failed_attempts} attempts", is_error=True)
+                            continue
+                        
+                        try:
+                            # Resolve peer and send
+                            await self.app.get_users([user_id])
+                            await asyncio.sleep(1)
+                            await self.app.send_message(user_id, message_content)
+                            
+                            # Success - remove from pending
+                            await conn.execute('DELETE FROM pending_welcome_dms WHERE user_id = $1', user_id)
+                            await self.log_to_debug(f"Successfully sent welcome DM to {first_name} (ID: {user_id}) on retry attempt {failed_attempts}")
+                            
+                        except Exception as e:
+                            logger.warning(f"Retry attempt {failed_attempts} failed for {first_name}: {e}")
+                            # Update attempt counter
+                            await conn.execute(
+                                'UPDATE pending_welcome_dms SET failed_attempts = $1, last_attempt = NOW() WHERE user_id = $2',
+                                failed_attempts + 1, user_id)
+                
+                await asyncio.sleep(120)  # Retry every 2 minutes
+                
+            except Exception as e:
+                logger.error(f"Error in retry welcome DMs loop: {e}")
+                await asyncio.sleep(120)
+
     async def send_followup_dm(self, member_id: str, days: int):
         try:
             if days == 3:
                 message = (
-                    f"Hey! It's been 3 days since your **3-day free access to the VIP Group** ended. We truly hope that you were able to catch good trades with us during that time.\n\n"
+                    f"Hey! It's been 3 days since your **3-day free access to the VIP Group** ended. We truly hope you got value from the **20+ trading signals** you received during that time.\n\n"
                     f"As you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\n"
                     f"We'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n"
                     f"**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
@@ -4457,6 +4900,7 @@ class TelegramTradingBot:
                     BotCommand("tradeoverride",
                                "Override trade status (menu)"),
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
+                    BotCommand("sendwelcomedm", "Send welcome DM to user (menu)"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM delivery statistics"),
                 ]
@@ -4467,6 +4911,77 @@ class TelegramTradingBot:
                     f"Owner commands registered for user {BOT_OWNER_USER_ID}")
         except Exception as e:
             logger.error(f"Error registering bot commands: {e}")
+
+    async def engagement_tracking_loop(self):
+        """Track emoji reactions in free group and send discount DM to engaged users."""
+        await asyncio.sleep(120)  # Wait 2 mins before starting
+        
+        while self.running:
+            try:
+                if not self.db_pool or not FREE_GROUP_ID:
+                    await asyncio.sleep(7200)  # Check every 2 hours
+                    continue
+
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                
+                # Get all free group joins
+                async with self.db_pool.acquire() as conn:
+                    joins = await conn.fetch(
+                        'SELECT user_id, joined_at, discount_sent FROM free_group_joins WHERE discount_sent = FALSE'
+                    )
+                
+                for join_row in joins:
+                    user_id = join_row['user_id']
+                    joined_at = join_row['joined_at']
+                    
+                    # Check if user has been in group for more than 2 weeks
+                    two_weeks_ago = joined_at + timedelta(days=14)
+                    if current_time < two_weeks_ago:
+                        continue
+                    
+                    # Count reactions AFTER 2-week mark
+                    async with self.db_pool.acquire() as conn:
+                        reaction_count = await conn.fetchval(
+                            '''SELECT COUNT(DISTINCT message_id) FROM emoji_reactions
+                               WHERE user_id = $1 AND reaction_time > $2''',
+                            user_id, two_weeks_ago
+                        )
+                    
+                    # If user has 5+ reactions after 2 weeks, send discount DM
+                    if reaction_count >= 5:
+                        await self.send_engagement_discount_dm(user_id)
+                        
+                        # Mark as sent
+                        async with self.db_pool.acquire() as conn:
+                            await conn.execute(
+                                'UPDATE free_group_joins SET discount_sent = TRUE WHERE user_id = $1',
+                                user_id
+                            )
+                        
+                        logger.info(f"Sent engagement discount DM to user {user_id} (5+ reactions after 2 weeks)")
+                
+                await asyncio.sleep(7200)  # Check every 2 hours
+            except Exception as e:
+                await self.log_to_debug(f"Error in engagement tracking loop: {e}", is_error=True)
+                await asyncio.sleep(7200)
+
+    async def send_engagement_discount_dm(self, user_id: int):
+        """Send 50% discount DM to engaged free group members."""
+        try:
+            message = (
+                f"Hey! 👋 We noticed that you've been engaging with our signals in the Free Group. We want to say that we truly appreciate it!\n\n"
+                f"As a thank you for your loyalty and engagement, we want to give you something special: **exclusive 50% discount for access to our VIP Group.**\n\n"
+                f"Here's what you'll unlock:\n"
+                f"• **36+ expert signals per week** (vs 6 per week in the free group)\n"
+                f"• **6+ trade signals PER DAY** from our professional trading team\n"
+                f"• Real-time price tracking and risk management\n\n"
+                f"**Your exclusive discount code is:** `Thank_You!50!`\n\n"
+                f"**You can upgrade to VIP and apply your discount code here:** https://whop.com/gold-pioneer/gold-pioneer/"
+            )
+            await self.app.send_message(user_id, message)
+            logger.info(f"Sent engagement discount DM to user {user_id}")
+        except Exception as e:
+            await self.log_to_debug(f"Could not send engagement discount DM to {user_id}: {e}", is_error=True)
 
     async def heartbeat_loop(self):
         while self.running:
@@ -4508,9 +5023,12 @@ class TelegramTradingBot:
 
         asyncio.create_task(self.price_tracking_loop())
         asyncio.create_task(self.trial_expiry_loop())
+        asyncio.create_task(self.preexpiration_warning_loop())
         asyncio.create_task(self.followup_dm_loop())
         asyncio.create_task(self.heartbeat_loop())
         asyncio.create_task(self.monday_activation_loop())
+        asyncio.create_task(self.engagement_tracking_loop())
+        asyncio.create_task(self.retry_failed_welcome_dms_loop())
 
         try:
             while self.running:
