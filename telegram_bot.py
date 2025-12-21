@@ -1320,21 +1320,12 @@ class TelegramTradingBot:
                 
                 context = self.sendwelcomedm_context.get(menu_id, {})
                 context['user_id'] = user_id_input
-                context['stage'] = 'selecting_type'
+                context['msg_type'] = 'welcome'
+                context['stage'] = 'confirmed'
                 self.sendwelcomedm_context[menu_id] = context
 
-                # Show message type selection
-                keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🎁 VIP Trial (3 days)", callback_data=f"swdm_{menu_id}_select_type_vip_trial")],
-                    [InlineKeyboardButton("👥 Free Group", callback_data=f"swdm_{menu_id}_select_type_free_group")],
-                    [InlineKeyboardButton("❌ Cancel", callback_data=f"swdm_{menu_id}_cancel")]
-                ])
-
-                await message.reply(
-                    f"**User ID:** `{user_id_input}`\n\n"
-                    f"**Select message type:**",
-                    reply_markup=keyboard
-                )
+                # Send welcome message directly
+                await self.execute_send_welcome_dm(None, menu_id, context, user_message=message)
             except ValueError:
                 await message.reply("Invalid user ID. Please provide a numeric ID only.")
             return
@@ -2172,94 +2163,34 @@ class TelegramTradingBot:
             await callback_query.answer()
             return
 
-        # Message type selection
-        if action == "select_type":
-            msg_type = parts[3] if len(parts) > 3 else ""
-            if msg_type not in ["vip_trial", "free_group"]:
-                await callback_query.answer("Invalid message type.", show_alert=True)
-                return
-
-            context['msg_type'] = msg_type
-            context['stage'] = 'confirmed'
-            self.sendwelcomedm_context[menu_id] = context
-
-            # Execute the send
-            await self.execute_send_welcome_dm(callback_query, menu_id, context)
-            return
-
         await callback_query.answer()
 
     async def handle_sendwelcomedm_user_input(self, client: Client, message: Message):
         """Handle user ID input for sendwelcomedm widget"""
-        if not await self.is_owner(message.from_user.id):
-            return
+        pass
 
-        try:
-            user_id = int(message.text.strip())
-            
-            # Find the context for this user
-            if not hasattr(self, 'sendwelcomedm_context'):
-                return
-            
-            # Find the active menu
-            menu_id = None
-            for mid, ctx in self.sendwelcomedm_context.items():
-                if ctx.get('stage') == 'waiting_for_user_id':
-                    menu_id = mid
-                    break
-            
-            if not menu_id:
-                await message.reply("No active sendwelcomedm session found.")
-                return
-            
-            context = self.sendwelcomedm_context[menu_id]
-            context['user_id'] = user_id
-            context['stage'] = 'selecting_type'
-            self.sendwelcomedm_context[menu_id] = context
-
-            # Show message type selection
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎁 VIP Trial (3 days)", callback_data=f"swdm_{menu_id}_select_type_vip_trial")],
-                [InlineKeyboardButton("👥 Free Group", callback_data=f"swdm_{menu_id}_select_type_free_group")],
-                [InlineKeyboardButton("❌ Cancel", callback_data=f"swdm_{menu_id}_cancel")]
-            ])
-
-            await message.reply(
-                f"**User ID:** `{user_id}`\n\n"
-                f"**Select message type:**",
-                reply_markup=keyboard
-            )
-        except ValueError:
-            await message.reply("Invalid user ID. Please provide a numeric ID only.")
-
-    async def execute_send_welcome_dm(self, callback_query: CallbackQuery, menu_id: str, context: dict):
+    async def execute_send_welcome_dm(self, callback_query: CallbackQuery, menu_id: str, context: dict, user_message: Message = None):
         """Execute the actual welcome DM send"""
         user_id = context.get('user_id')
-        msg_type = context.get('msg_type')
 
-        if not user_id or not msg_type:
-            await callback_query.message.edit_text("❌ Missing user ID or message type.")
-            await callback_query.answer()
+        if not user_id:
+            if callback_query:
+                await callback_query.message.edit_text("❌ Missing user ID.")
+                await callback_query.answer()
+            else:
+                await user_message.reply("❌ Missing user ID.")
             self.sendwelcomedm_context.pop(menu_id, None)
             return
 
         # Prepare the welcome message
-        if msg_type == "vip_trial":
-            welcome_msg = (
-                f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
-                f"**access to the VIP Group for 3 trading days.** "
-                f"Your access will expire on **Wednesday at 22:59**. "
-                f"Good luck trading!"
-            )
-        else:  # free_group
-            welcome_msg = (
-                f"**Hey, Welcome to FX Pip Pioneers!**\n\n"
-                f"**Want to try our VIP Group for FREE?**\n"
-                f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
-                f"**6+ high-quality trade signals per day**.\n\n"
-                f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
-                f"Good luck trading!"
-            )
+        welcome_msg = (
+            f"**Hey, Welcome to FX Pip Pioneers!**\n\n"
+            f"**Want to try our VIP Group for FREE?**\n"
+            f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
+            f"**6+ high-quality trade signals per day**.\n\n"
+            f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
+            f"Good luck trading!"
+        )
 
         # Try to send the message
         try:
@@ -2267,33 +2198,55 @@ class TelegramTradingBot:
             await self.app.get_users([user_id])
             await asyncio.sleep(1)
             await self.app.send_message(user_id, welcome_msg)
-            await callback_query.message.edit_text(
-                f"✅ **Success!**\n\n"
-                f"Welcome DM sent to user **{user_id}**\n"
-                f"Type: **{msg_type}**"
-            )
-            await self.log_to_debug(f"Owner sent {msg_type} welcome DM to user {user_id} via /sendwelcomedm widget")
+            
+            if callback_query:
+                await callback_query.message.edit_text(
+                    f"✅ **Success!**\n\n"
+                    f"Welcome DM sent to user **{user_id}**"
+                )
+            else:
+                await user_message.reply(
+                    f"✅ **Success!**\n\n"
+                    f"Welcome DM sent to user **{user_id}**"
+                )
+            await self.log_to_debug(f"Owner sent welcome DM to user {user_id} via /sendwelcomedm widget")
         except Exception as e:
             error_str = str(e)
             if "PEER_ID_INVALID" in error_str or "UserIsBlocked" in error_str:
                 # Add to retry queue
-                await self.track_failed_welcome_dm(user_id, f"User {user_id}", msg_type, welcome_msg)
-                await callback_query.message.edit_text(
-                    f"⚠️ **Peer Not Ready**\n\n"
-                    f"Could not send immediately, but added to retry queue.\n\n"
-                    f"The bot will automatically retry every 2 minutes (up to 5 attempts).\n\n"
-                    f"User ID: `{user_id}`"
-                )
+                await self.track_failed_welcome_dm(user_id, f"User {user_id}", "welcome", welcome_msg)
+                if callback_query:
+                    await callback_query.message.edit_text(
+                        f"⚠️ **Peer Not Ready**\n\n"
+                        f"Could not send immediately, but added to retry queue.\n\n"
+                        f"The bot will automatically retry every 2 minutes (up to 5 attempts).\n\n"
+                        f"User ID: `{user_id}`"
+                    )
+                else:
+                    await user_message.reply(
+                        f"⚠️ **Peer Not Ready**\n\n"
+                        f"Could not send immediately, but added to retry queue.\n\n"
+                        f"The bot will automatically retry every 2 minutes (up to 5 attempts).\n\n"
+                        f"User ID: `{user_id}`"
+                    )
                 await self.log_to_debug(f"Added user {user_id} to welcome DM retry queue via /sendwelcomedm widget", is_error=True)
             else:
-                await callback_query.message.edit_text(
-                    f"❌ **Error**\n\n"
-                    f"Could not send DM to user **{user_id}**\n\n"
-                    f"Error: `{error_str[:100]}`"
-                )
+                if callback_query:
+                    await callback_query.message.edit_text(
+                        f"❌ **Error**\n\n"
+                        f"Could not send DM to user **{user_id}**\n\n"
+                        f"Error: `{error_str[:100]}`"
+                    )
+                else:
+                    await user_message.reply(
+                        f"❌ **Error**\n\n"
+                        f"Could not send DM to user **{user_id}**\n\n"
+                        f"Error: `{error_str[:100]}`"
+                    )
                 await self.log_to_debug(f"Error sending welcome DM to user {user_id}: {error_str}", is_error=True)
         
-        await callback_query.answer()
+        if callback_query:
+            await callback_query.answer()
         self.sendwelcomedm_context.pop(menu_id, None)
 
     async def handle_timed_auto_role(self, client: Client, message: Message):
@@ -3155,39 +3108,6 @@ class TelegramTradingBot:
         }
 
         await self.save_auto_role_config()
-
-        welcome_msg = (
-            f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
-            f"**access to the VIP Group for 3 trading days.** "
-            f"Your access will expire on {expiry_time.strftime('%A at %H:%M')}. "
-            f"Good luck trading!")
-
-        try:
-            await client.send_message(user.id, welcome_msg)
-        except Exception as e:
-            error_str = str(e)
-            if "PEER_ID_INVALID" in error_str:
-                logger.warning(
-                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Resolving peer...")
-                try:
-                    # Resolve the peer connection first
-                    await client.get_users([user.id])
-                    await asyncio.sleep(2)
-                    await client.send_message(user.id, welcome_msg)
-                    await self.log_to_debug(
-                        f"Sent welcome DM to {user.first_name} after peer resolution")
-                except Exception as retry_error:
-                    error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {retry_error}"
-                    logger.error(error_msg)
-                    await self.log_to_debug(error_msg, is_error=True)
-                    # Track for retry
-                    await self.track_failed_welcome_dm(user.id, user.first_name, "vip_trial", welcome_msg)
-            else:
-                error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
-                logger.error(error_msg)
-                await self.log_to_debug(error_msg, is_error=True)
-                # Track for retry
-                await self.track_failed_welcome_dm(user.id, user.first_name, "vip_trial", welcome_msg)
 
     async def get_working_api_for_pair(self, pair: str) -> str:
         pair_clean = pair.upper().replace("/",
