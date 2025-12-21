@@ -72,7 +72,7 @@ VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
 DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID", "0"))
 FREE_GROUP_LINK = os.getenv("FREE_GROUP_LINK", "")
 VIP_GROUP_LINK = os.getenv("VIP_GROUP_LINK", "")
-VIP_TRIAL_INVITE_LINK = "https://t.me/+CAIhr3HMwYUwYzg0"
+VIP_TRIAL_INVITE_LINK = "https://t.me/+5X18tTjgM042ODU0"
 WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
 
 if TELEGRAM_BOT_TOKEN:
@@ -91,7 +91,7 @@ if BOT_OWNER_USER_ID == 0:
 else:
     print(f"✅ Bot owner commands enabled for user {BOT_OWNER_USER_ID}")
 
-print(f"🔗 VIP Trial invite link configured: https://t.me/+CAIhr3HMwYUwYzg0")
+print(f"🔗 VIP Trial invite link configured: https://t.me/+5X18tTjgM042ODU0")
 print(
     f"🔗 Whop purchase link configured: https://whop.com/gold-pioneer/gold-pioneer/"
 )
@@ -2838,7 +2838,7 @@ class TelegramTradingBot:
             f"**Want to try our VIP Group for FREE?**\n"
             f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
             f"**6+ high-quality trade signals per day**.\n\n"
-            f"**Activate your free trial here:** https://t.me/+CAIhr3HMwYUwYzg0\n\n"
+            f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!")
 
         await asyncio.sleep(5)
