@@ -409,12 +409,6 @@ class TelegramTradingBot:
                 "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm"
             ]))
         async def text_input_handler(client, message: Message):
-            # Check if this is a response to sendwelcomedm widget
-            if message.reply_to_message:
-                if "Enter User ID" in message.reply_to_message.text:
-                    await self.handle_sendwelcomedm_user_input(client, message)
-                    return
-            
             await self.handle_text_input(client, message)
 
         @self.app.on_message(filters.group & filters.text & ~filters.command([
@@ -1312,6 +1306,82 @@ class TelegramTradingBot:
                 await message.reply(f"Error: {str(e)}")
                 return
 
+        # Handle sendwelcomedm user ID input
+        if not hasattr(self, 'awaiting_sendwelcomedm_input'):
+            self.awaiting_sendwelcomedm_input = {}
+        
+        if user_id in self.awaiting_sendwelcomedm_input:
+            menu_id = self.awaiting_sendwelcomedm_input.pop(user_id)
+            try:
+                user_id_input = int(message.text.strip())
+                
+                if not hasattr(self, 'sendwelcomedm_context'):
+                    self.sendwelcomedm_context = {}
+                
+                context = self.sendwelcomedm_context.get(menu_id, {})
+                context['user_id'] = user_id_input
+                context['stage'] = 'selecting_type'
+                self.sendwelcomedm_context[menu_id] = context
+
+                # Show message type selection
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎁 VIP Trial (3 days)", callback_data=f"swdm_{menu_id}_select_type_vip_trial")],
+                    [InlineKeyboardButton("👥 Free Group", callback_data=f"swdm_{menu_id}_select_type_free_group")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data=f"swdm_{menu_id}_cancel")]
+                ])
+
+                await message.reply(
+                    f"**User ID:** `{user_id_input}`\n\n"
+                    f"**Select message type:**",
+                    reply_markup=keyboard
+                )
+            except ValueError:
+                await message.reply("Invalid user ID. Please provide a numeric ID only.")
+            return
+
+        # Handle cleartrial custom member ID input
+        if not hasattr(self, 'awaiting_cleartrial_input'):
+            self.awaiting_cleartrial_input = {}
+        
+        if user_id in self.awaiting_cleartrial_input:
+            menu_id = self.awaiting_cleartrial_input.pop(user_id)
+            try:
+                selected_user_id_str = str(int(message.text.strip()))
+                
+                # Clear the user from trial system
+                AUTO_ROLE_CONFIG['active_members'].pop(selected_user_id_str, None)
+                AUTO_ROLE_CONFIG['role_history'].pop(selected_user_id_str, None)
+                AUTO_ROLE_CONFIG['dm_schedule'].pop(selected_user_id_str, None)
+                AUTO_ROLE_CONFIG['weekend_pending'].pop(selected_user_id_str, None)
+
+                if self.db_pool:
+                    try:
+                        async with self.db_pool.acquire() as conn:
+                            await conn.execute(
+                                "DELETE FROM active_members WHERE member_id = $1",
+                                int(selected_user_id_str))
+                            await conn.execute(
+                                "DELETE FROM role_history WHERE member_id = $1",
+                                int(selected_user_id_str))
+                            await conn.execute(
+                                "DELETE FROM dm_schedule WHERE member_id = $1",
+                                int(selected_user_id_str))
+                            await conn.execute(
+                                "DELETE FROM weekend_pending WHERE member_id = $1",
+                                int(selected_user_id_str))
+                    except Exception as e:
+                        logger.error(f"Error clearing user {selected_user_id_str} from database: {e}")
+
+                await self.save_auto_role_config()
+                if hasattr(self, 'cleartrial_mappings'):
+                    self.cleartrial_mappings.pop(menu_id, None)
+                
+                await message.reply(
+                    f"✅ User {selected_user_id_str} removed from all trial tracking")
+            except ValueError:
+                await message.reply("Invalid member ID. Please provide a numeric ID only.")
+            return
+
         if user_id in self.awaiting_custom_pair:
             pair = message.text.upper().strip()
             awaiting_data = self.awaiting_custom_pair.pop(user_id)
@@ -2084,6 +2154,11 @@ class TelegramTradingBot:
         if action == "input":
             context['stage'] = 'waiting_for_user_id'
             self.sendwelcomedm_context[menu_id] = context
+            
+            # Track that we're awaiting user ID input for this menu
+            if not hasattr(self, 'awaiting_sendwelcomedm_input'):
+                self.awaiting_sendwelcomedm_input = {}
+            self.awaiting_sendwelcomedm_input[callback_query.from_user.id] = menu_id
 
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("❌ Cancel", callback_data=f"swdm_{menu_id}_cancel")]
@@ -2745,6 +2820,12 @@ class TelegramTradingBot:
 
         if action_type == "custom":
             self.cleartrial_mappings[menu_id] = {'waiting_for_id': True}
+            
+            # Track that we're awaiting custom member ID input
+            if not hasattr(self, 'awaiting_cleartrial_input'):
+                self.awaiting_cleartrial_input = {}
+            self.awaiting_cleartrial_input[callback_query.from_user.id] = menu_id
+            
             await callback_query.message.edit_text(
                 "**Enter Member ID**\n\n"
                 "Please reply with the member ID you want to clear from trial tracking."
