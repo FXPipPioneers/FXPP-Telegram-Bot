@@ -388,6 +388,13 @@ class TelegramTradingBot:
         async def pricetest_callback(client, callback_query: CallbackQuery):
             await self.handle_pricetest_callback(client, callback_query)
 
+        @self.app.on_callback_query(filters.regex("^retrt_"))
+        async def retracttrial_callback(client, callback_query: CallbackQuery):
+            await self.handle_retracttrial_callback(client, callback_query)
+
+        @self.app.on_callback_query(filters.regex("^clrtrl_"))
+        async def cleartrial_callback(client, callback_query: CallbackQuery):
+            await self.handle_cleartrial_callback(client, callback_query)
 
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
@@ -2841,7 +2848,7 @@ class TelegramTradingBot:
             f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!")
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(60)
 
         try:
             await client.send_message(user.id, welcome_dm)
