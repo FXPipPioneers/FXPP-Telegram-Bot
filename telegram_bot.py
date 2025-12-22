@@ -2964,36 +2964,29 @@ class TelegramTradingBot:
             f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!")
 
-        # Wait 8 minutes before starting peer connection checks
-        await asyncio.sleep(480)
+        # Multi-Check Peer Establishment (3-point system):
+        # Check 1: Instant (second 0) when member joins
+        try:
+            await client.get_users([user.id])
+            logger.info(f"Peer established immediately for {user.first_name} (Check 1)")
+        except Exception as e:
+            logger.debug(f"Peer Check 1 failed for {user.first_name}: {str(e)[:50]}")
 
-        # Establish peer connection: repeatedly try for 7 minutes (420 seconds) with checks every 10 seconds
-        max_wait_seconds = 420
-        check_interval = 10  # Check every 10 seconds
-        elapsed = 0
-        peer_established = False
-        
-        while elapsed < max_wait_seconds and not peer_established:
-            try:
-                await client.get_users([user.id])
-                peer_established = True
-                logger.info(f"Peer established for {user.first_name} after {480 + elapsed} seconds total")
-                break
-            except Exception as e:
-                logger.debug(f"Peer check for {user.first_name} at {480 + elapsed}s: {str(e)[:50]}")
-                await asyncio.sleep(check_interval)
-                elapsed += check_interval
+        # Check 2: After 7 seconds to reinforce connection
+        await asyncio.sleep(7)
+        try:
+            await client.get_users([user.id])
+            logger.info(f"Peer confirmed for {user.first_name} (Check 2)")
+        except Exception as e:
+            logger.debug(f"Peer Check 2 failed for {user.first_name}: {str(e)[:50]}")
+
+        # Send DM: At second 20 after guaranteed peer establishment
+        await asyncio.sleep(13)  # 7 + 13 = 20 seconds total
 
         try:
-            if peer_established:
-                await client.send_message(user.id, welcome_dm)
-                await self.log_to_debug(
-                    f"Sent welcome DM to {user.first_name} about VIP trial")
-            else:
-                error_msg = f"Could not establish peer connection for {user.first_name} after 15 minutes, will retry in 2 minutes"
-                logger.error(error_msg)
-                await self.log_to_debug(error_msg, is_error=True)
-                await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
+            await client.send_message(user.id, welcome_dm)
+            await self.log_to_debug(
+                f"Sent welcome DM to {user.first_name} about VIP trial")
         except Exception as e:
             error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
             logger.error(error_msg)
@@ -3449,7 +3442,7 @@ class TelegramTradingBot:
 
         tp3_messages = [
             "TP3 hit. Full target smashed, perfect execution 🔥🔥🔥",
-            "Huge win, TP3 reached. Congrats to everyone who followed 📊🚀",
+            "Huge win, TP3 reached. Perfect trade 📊🚀",
             "TP3 just got hit. Close it out and lock in profits 💸🎯",
             "TP3 tagged. That wraps up the full setup — solid trade 💪💼",
             "TP3 locked in. Flawless setup from entry to exit 🙌📈",
@@ -4963,27 +4956,37 @@ class TelegramTradingBot:
                 BotCommand("pricetest", "Test live price for a pair"),
             ]
             await self.app.set_bot_commands(public_commands)
-            logger.info("Public bot commands registered")
+            logger.info(f"✅ Public bot commands registered ({len(public_commands)} commands)")
 
             if BOT_OWNER_USER_ID:
                 owner_commands = [
                     BotCommand("activetrades", "View active trading signals"),
                     BotCommand("pricetest", "Test live price for a pair"),
                     BotCommand("entry", "Create trading signal (menu)"),
-                    BotCommand("tradeoverride",
-                               "Override trade status (menu)"),
+                    BotCommand("tradeoverride", "Override trade status (menu)"),
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
-                    BotCommand("sendwelcomedm", "Send welcome DM to user (menu)"),
+                    BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("dbstatus", "Database health check"),
-                    BotCommand("dmstatus", "DM delivery statistics"),
+                    BotCommand("dmstatus", "DM statistics"),
                 ]
-                await self.app.set_bot_commands(
-                    owner_commands,
-                    scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
-                logger.info(
-                    f"Owner commands registered for user {BOT_OWNER_USER_ID}")
+                try:
+                    await self.app.set_bot_commands(
+                        owner_commands,
+                        scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
+                    logger.info(
+                        f"✅ Owner commands registered for user {BOT_OWNER_USER_ID} ({len(owner_commands)} commands)")
+                except Exception as scope_error:
+                    logger.error(f"❌ Error setting owner-scoped commands: {scope_error}")
+                    # Fallback: try setting without scope
+                    try:
+                        await self.app.set_bot_commands(owner_commands)
+                        logger.info(f"✅ Owner commands registered globally ({len(owner_commands)} commands)")
+                    except Exception as fallback_error:
+                        logger.error(f"❌ Error setting global owner commands: {fallback_error}")
+            else:
+                logger.warning("⚠️  BOT_OWNER_USER_ID not set, skipping owner-specific commands")
         except Exception as e:
-            logger.error(f"Error registering bot commands: {e}")
+            logger.error(f"❌ Error registering bot commands: {e}")
 
     async def engagement_tracking_loop(self):
         """Track emoji reactions in free group and send discount DM to engaged users."""
