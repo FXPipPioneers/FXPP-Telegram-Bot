@@ -759,17 +759,18 @@ class TelegramTradingBot:
     def calculate_trial_expiry_time(self, join_time: datetime) -> datetime:
         """
         Calculate trial expiry time to ensure exactly 3 trading days.
-        Trading days: Monday-Friday only
+        Trading days: Monday-Friday only (3 full trading days AFTER join date)
         
         Rules:
         - Saturday/Sunday joiners: Always expire Wednesday 22:59 (regardless of join time)
-        - All other days: Expire exactly 3 trading days later at the same time they joined
+        - All other days: Expire exactly 3 trading days after join at the same time they joined
         
         Examples:
         - Saturday 13:37 join → expires Wednesday 22:59
         - Sunday 03:00 join → expires Wednesday 22:59
-        - Friday 13:37 join → expires Tuesday 13:37 (5 calendar days: Fri→Sat→Sun→Mon→Tue)
-        - Wednesday 14:00 join → expires Friday 14:00 (Wed, Thu, Fri = 3 trading days)
+        - Monday 00:10 join → expires Thursday 00:10 (Tue, Wed, Thu = 3 trading days)
+        - Friday 13:37 join → expires Wednesday 13:37 (Mon, Tue, Wed = 3 trading days)
+        - Wednesday 14:00 join → expires Monday 14:00 (Thu, Fri, Mon = 3 trading days)
         """
         if join_time.tzinfo is None:
             join_time = AMSTERDAM_TZ.localize(join_time)
@@ -791,9 +792,9 @@ class TelegramTradingBot:
                          current_date.day, 22, 59, 0))
             return expiry_time
 
-        # For other weekdays, count exactly 3 trading days from join time
+        # For other weekdays, count exactly 3 trading days AFTER the join date
         trading_days_counted = 0
-        current_date = join_time.date()
+        current_date = join_time.date() + timedelta(days=1)  # Start from the day after join
 
         while True:
             day_weekday = current_date.weekday()
@@ -4345,7 +4346,7 @@ class TelegramTradingBot:
             return
         
         try:
-            all_members = await self.app.get_chat_members(FREE_GROUP_ID)
+            all_members = self.app.get_chat_members(FREE_GROUP_ID)
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
             missed_count = 0
             
@@ -4370,11 +4371,11 @@ class TelegramTradingBot:
                             user_id, current_time)
                     
                     welcome_dm = (
-                        f"**Hey {member.user.first_name}, Welcome to FX Pip Pioneers!**\n\n"
+                        f"**Hey, Welcome to FX Pip Pioneers!**\n\n"
                         f"**Want to try our VIP Group for FREE?**\n"
                         f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
                         f"**6+ high-quality trade signals per day**.\n\n"
-                        f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
+                        f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
                         f"Good luck trading!")
                     
                     try:
@@ -4479,6 +4480,56 @@ class TelegramTradingBot:
         except Exception as e:
             logger.error(f"Error checking offline followup DMs: {e}")
             await self.log_to_debug(f"Error recovering followup DMs: {e}", is_error=True)
+
+    async def validate_and_fix_trial_expiry_times(self):
+        """Check all existing trial members and fix their expiry times if incorrect"""
+        fixed_count = 0
+        verified_count = 0
+        
+        try:
+            for member_id, data in list(AUTO_ROLE_CONFIG['active_members'].items()):
+                join_time_str = data.get('joined_at')
+                expiry_time_str = data.get('expiry_time')
+                
+                if not join_time_str or not expiry_time_str:
+                    continue
+                
+                # Parse join and expiry times
+                join_time = datetime.fromisoformat(join_time_str)
+                if join_time.tzinfo is None:
+                    join_time = AMSTERDAM_TZ.localize(join_time)
+                
+                expiry_time = datetime.fromisoformat(expiry_time_str)
+                if expiry_time.tzinfo is None:
+                    expiry_time = AMSTERDAM_TZ.localize(expiry_time)
+                
+                # Recalculate what the correct expiry time should be
+                correct_expiry = self.calculate_trial_expiry_time(join_time)
+                
+                # Compare (allowing small time differences due to timezone handling)
+                time_diff = abs((correct_expiry - expiry_time).total_seconds())
+                
+                if time_diff > 60:  # More than 1 minute difference = needs fixing
+                    # Update the expiry time
+                    data['expiry_time'] = correct_expiry.isoformat()
+                    fixed_count += 1
+                    logger.info(f"Fixed trial expiry for user {member_id}: was {expiry_time.strftime('%A %H:%M')}, now {correct_expiry.strftime('%A %H:%M')}")
+                else:
+                    verified_count += 1
+            
+            # Save corrected config
+            if fixed_count > 0:
+                await self.save_auto_role_config()
+            
+            # Log results
+            if fixed_count > 0 or verified_count > 0:
+                message = f"✅ Trial expiry validation complete: {verified_count} verified, {fixed_count} corrected"
+                logger.info(message)
+                await self.log_to_debug(message)
+        
+        except Exception as e:
+            logger.error(f"Error validating trial expiry times: {e}")
+            await self.log_to_debug(f"Error validating trial expiry times: {e}", is_error=True)
 
     async def check_offline_engagement_discounts(self):
         """Recover and send missed engagement discount DMs"""
@@ -5026,6 +5077,7 @@ class TelegramTradingBot:
         await self.check_offline_preexpiration_warnings()
         await self.check_offline_followup_dms()
         await self.check_offline_engagement_discounts()
+        await self.validate_and_fix_trial_expiry_times()
 
         asyncio.create_task(self.price_tracking_loop())
         asyncio.create_task(self.trial_expiry_loop())
