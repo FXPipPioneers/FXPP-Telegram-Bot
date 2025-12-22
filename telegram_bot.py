@@ -455,19 +455,17 @@ class TelegramTradingBot:
                     emoji_str = str(reaction.emoji) if hasattr(reaction, 'emoji') else str(reaction)
                     
                     try:
-                        # Note: Pyrogram may not support get_reaction_users for all account types
-                        # This is a placeholder for potential future Telegram API support
-                        if hasattr(self.app, 'get_reaction_users'):
-                            async for reactor in self.app.get_reaction_users(
-                                FREE_GROUP_ID, message.id, emoji_str):
-                                
-                                # Store INDIVIDUAL user reaction
-                                await conn.execute(
-                                    '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
-                                       VALUES ($1, $2, $3, $4)
-                                       ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
-                                    reactor.id, message.id, emoji_str, current_time
-                                )
+                        # Get list of users who reacted with this emoji
+                        async for reactor in self.app.get_reaction_users(
+                            FREE_GROUP_ID, message.id, emoji_str):
+                            
+                            # Store INDIVIDUAL user reaction
+                            await conn.execute(
+                                '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
+                                   VALUES ($1, $2, $3, $4)
+                                   ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
+                                reactor.id, message.id, emoji_str, current_time
+                            )
                     except Exception as e:
                         logger.debug(f"Error fetching reactors for emoji {emoji_str}: {e}")
         except Exception as e:
@@ -1495,9 +1493,9 @@ class TelegramTradingBot:
                 price_line = "**Current: N/A**"
                 position_text = "_Unable to get price_"
 
-            tp1_mark = "✅" if 'tp1' in tp_hits else "⭕"
-            tp2_mark = "✅" if 'tp2' in tp_hits else "⭕"
-            tp3_mark = "✅" if 'tp3' in tp_hits else "⭕"
+            tp1_mark = "✅" if 'TP1' in [t.upper() for t in tp_hits] else "⭕"
+            tp2_mark = "✅" if 'TP2' in [t.upper() for t in tp_hits] else "⭕"
+            tp3_mark = "✅" if 'TP3' in [t.upper() for t in tp_hits] else "⭕"
             sl_mark = "🔴" if 'sl' in status.lower() else "⭕"
 
             levels_display = (f"{sl_mark} SL: {sl:.5f}\n"
@@ -1803,58 +1801,62 @@ class TelegramTradingBot:
 
                     elif action_type == 'tp1hit':
                         if 'TP1' not in trade.get('tp_hits', []):
-                            trade['tp_hits'] = trade.get('tp_hits',
-                                                         []) + ['TP1']
+                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
                         trade['status'] = 'active (tp1 hit - manual override)'
+                        await self.update_trade_in_db(full_msg_id, trade)
                         await self.send_tp_notification(
                             full_msg_id, trade, 'TP1',
                             trade.get('tp1_price', 0))
-                        await self.update_trade_in_db(full_msg_id, trade)
                         successful_trades.append(
                             f"{pair} {action}{group_label} - TP1 Hit")
 
                     elif action_type == 'tp2hit':
                         current_tp_hits = trade.get('tp_hits', [])
                         if 'TP1' not in current_tp_hits:
-                            trade['tp_hits'] = current_tp_hits + ['TP1']
+                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
+                            await self.update_trade_in_db(full_msg_id, trade)
                             await self.send_tp_notification(
                                 full_msg_id, trade, 'TP1',
                                 trade.get('tp1_price', 0))
                             await asyncio.sleep(1)
-                        if 'TP2' not in trade.get('tp_hits', []):
-                            trade['tp_hits'] = trade.get('tp_hits',
-                                                         []) + ['TP2']
+                        
+                        current_tp_hits = trade.get('tp_hits', [])
+                        if 'TP2' not in current_tp_hits:
+                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP2']
                         trade['breakeven_active'] = True
-                        trade[
-                            'status'] = 'active (tp2 hit - manual override - breakeven active)'
+                        trade['status'] = 'active (tp2 hit - manual override - breakeven active)'
+                        await self.update_trade_in_db(full_msg_id, trade)
                         await self.send_tp_notification(
                             full_msg_id, trade, 'TP2',
                             trade.get('tp2_price', 0))
-                        await self.update_trade_in_db(full_msg_id, trade)
                         successful_trades.append(
                             f"{pair} {action}{group_label} - TP2 Hit")
 
                     elif action_type == 'tp3hit':
                         current_tp_hits = trade.get('tp_hits', [])
                         if 'TP1' not in current_tp_hits:
-                            trade['tp_hits'] = current_tp_hits + ['TP1']
+                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
+                            await self.update_trade_in_db(full_msg_id, trade)
                             await self.send_tp_notification(
                                 full_msg_id, trade, 'TP1',
                                 trade.get('tp1_price', 0))
                             await asyncio.sleep(1)
-                        if 'TP2' not in trade.get('tp_hits', []):
-                            trade['tp_hits'] = trade.get('tp_hits',
-                                                         []) + ['TP2']
+                        
+                        current_tp_hits = trade.get('tp_hits', [])
+                        if 'TP2' not in current_tp_hits:
+                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP2']
                             trade['breakeven_active'] = True
+                            await self.update_trade_in_db(full_msg_id, trade)
                             await self.send_tp_notification(
                                 full_msg_id, trade, 'TP2',
                                 trade.get('tp2_price', 0))
                             await asyncio.sleep(1)
-                        if 'TP3' not in trade.get('tp_hits', []):
-                            trade['tp_hits'] = trade.get('tp_hits',
-                                                         []) + ['TP3']
-                        trade[
-                            'status'] = 'completed (tp3 hit - manual override)'
+                            
+                        current_tp_hits = trade.get('tp_hits', [])
+                        if 'TP3' not in current_tp_hits:
+                            trade['tp_hits'] = trade.get('tp_hits', []) + ['TP3']
+                        trade['status'] = 'completed (tp3 hit - manual override)'
+                        await self.update_trade_in_db(full_msg_id, trade)
                         await self.send_tp_notification(
                             full_msg_id, trade, 'TP3',
                             trade.get('tp3_price', 0))
@@ -2172,20 +2174,17 @@ class TelegramTradingBot:
         """Handle user ID input for sendwelcomedm widget"""
         pass
 
-    async def execute_send_welcome_dm(self, callback_query = None, menu_id: str = "", context: dict = None, user_message: Message = None):
+    async def execute_send_welcome_dm(self, callback_query: CallbackQuery, menu_id: str, context: dict, user_message: Message = None):
         """Execute the actual welcome DM send"""
-        if context is None:
-            context = {}
         user_id = context.get('user_id')
 
         if not user_id:
             if callback_query:
                 await callback_query.message.edit_text("❌ Missing user ID.")
                 await callback_query.answer()
-            elif user_message:
+            else:
                 await user_message.reply("❌ Missing user ID.")
-            if menu_id:
-                self.sendwelcomedm_context.pop(menu_id, None)
+            self.sendwelcomedm_context.pop(menu_id, None)
             return
 
         # Prepare the welcome message
@@ -2886,9 +2885,9 @@ class TelegramTradingBot:
                         f"Unfortunately, our free trial can only be used once per person. Your trial has already ran out, so we can't give you another.\n\n"
                         f"We truly hope that you were able to profit with us during your free trial. If you were happy with the results you got, then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
                     )
-                    await self.app.send_message(user_id,
-                                                rejection_dm,
-                                                disable_web_page_preview=True)
+                    await client.send_message(user_id,
+                                              rejection_dm,
+                                              disable_web_page_preview=True)
                     logger.info(f"Sent rejection DM to {user_name}")
                 except Exception as e:
                     logger.error(
@@ -2969,13 +2968,29 @@ class TelegramTradingBot:
             f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!")
 
-        # Wait 20 seconds for the user to see the welcome message in chat before sending DM
-        await asyncio.sleep(20)
+        # Multi-Check Peer Establishment (3-point system):
+        # Check 1: Instant (second 0) when member joins
+        try:
+            await client.get_users([user.id])
+            logger.info(f"Peer established immediately for {user.first_name} (Check 1)")
+        except Exception as e:
+            logger.debug(f"Peer Check 1 failed for {user.first_name}: {str(e)[:50]}")
+
+        # Check 2: After 7 seconds to reinforce connection
+        await asyncio.sleep(7)
+        try:
+            await client.get_users([user.id])
+            logger.info(f"Peer confirmed for {user.first_name} (Check 2)")
+        except Exception as e:
+            logger.debug(f"Peer Check 2 failed for {user.first_name}: {str(e)[:50]}")
+
+        # Send DM: At second 20 after guaranteed peer establishment
+        await asyncio.sleep(13)  # 7 + 13 = 20 seconds total
 
         try:
-            await self.app.send_message(user.id, welcome_dm)
+            await client.send_message(user.id, welcome_dm)
             await self.log_to_debug(
-                f"✅ Sent welcome DM to {user.first_name} about VIP trial")
+                f"Sent welcome DM to {user.first_name} about VIP trial")
         except Exception as e:
             error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
             logger.error(error_msg)
@@ -3092,9 +3107,11 @@ class TelegramTradingBot:
             f"Good luck trading!")
 
         try:
+            await self.app.get_users([user.id])
+            await asyncio.sleep(1)
             await self.app.send_message(user.id, welcome_msg)
             await self.log_to_debug(
-                f"✅ Sent trial welcome DM to {user.first_name} (expiring {expiry_time.strftime('%A at %H:%M')})")
+                f"Sent trial welcome DM to {user.first_name} (expiring {expiry_time.strftime('%A at %H:%M')})")
         except Exception as e:
             error_msg = f"Could not send trial welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
             logger.error(error_msg)
@@ -3245,18 +3262,12 @@ class TelegramTradingBot:
     async def check_message_still_exists(self, message_id: str, trade_data: dict) -> bool:
         """Check if the original trading signal message still exists in Telegram"""
         try:
-            # Try chat_id first (main field), then fall back to channel_id
-            chat_id = trade_data.get('chat_id') or trade_data.get('channel_id')
+            chat_id = trade_data.get('group_id')
             if not chat_id:
                 return False
             
-            # Extract actual message ID from the trade_key if needed
-            actual_message_id = message_id
-            if '_' in str(message_id):
-                actual_message_id = str(message_id).split('_', 1)[1]
-            
             # Try to fetch the message from the group
-            message = await self.app.get_messages(int(chat_id), int(actual_message_id))
+            message = await self.app.get_messages(int(chat_id), int(message_id))
             return message is not None
         except Exception as e:
             # Only treat as deleted if it's a specific "not found" error
@@ -3277,7 +3288,6 @@ class TelegramTradingBot:
         # First check if the original message still exists (cleanup deleted signals)
         if not await self.check_message_still_exists(message_id, trade_data):
             await self.remove_trade_from_db(message_id, "message_deleted")
-            # Remove using trade_key format (chat_id_message_id)
             if message_id in PRICE_TRACKING_CONFIG['active_trades']:
                 del PRICE_TRACKING_CONFIG['active_trades'][message_id]
             return
@@ -3426,7 +3436,6 @@ class TelegramTradingBot:
         del PRICE_TRACKING_CONFIG['active_trades'][message_id]
         await self.remove_trade_from_db(message_id, 'breakeven_hit')
 
-        entry_price = trade.get('entry_price', 0)
         await self.log_to_debug(
             f"{trade['pair']} {trade['action']} hit breakeven @ {entry_price:.5f}"
         )
@@ -4450,6 +4459,7 @@ class TelegramTradingBot:
             return
         
         try:
+            all_members = self.app.get_chat_members(FREE_GROUP_ID)
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
             missed_count = 0
             
@@ -4457,7 +4467,7 @@ class TelegramTradingBot:
                 known_members = await conn.fetch('SELECT user_id FROM free_group_joins')
                 known_user_ids = {row['user_id'] for row in known_members}
             
-            async for member in self.app.get_chat_members(FREE_GROUP_ID):
+            async for member in all_members:
                 if member.user.is_bot:
                     continue
                     
@@ -5185,9 +5195,19 @@ class TelegramTradingBot:
             except Exception as e:
                 logger.error(f"Could not send startup message: {e}")
 
-        # NOTE: DO NOT restore trades marked as "message_deleted" - if a user deleted a signal, respect that deletion
-        # Previous versions had this logic and it caused deleted trades to reappear on restart
-        logger.info("Trade restoration skipped - respecting user deletions")
+        # Restore any trades that were incorrectly marked as deleted
+        restored_trades = await self.restore_trades_from_completed("message_deleted")
+        if restored_trades:
+            logger.info(f"✅ Restored {len(restored_trades)} trades that were incorrectly marked as deleted")
+            try:
+                if DEBUG_GROUP_ID:
+                    await self.app.send_message(
+                        DEBUG_GROUP_ID,
+                        f"✅ **Recovery Complete:** Restored {len(restored_trades)} trades:\n" +
+                        "\n".join([f"- Message ID: {mid}" for mid in restored_trades[:5]]) +
+                        (f"\n... and {len(restored_trades) - 5} more" if len(restored_trades) > 5 else ""))
+            except Exception as e:
+                logger.error(f"Could not send recovery message: {e}")
 
         await self.check_offline_tp_sl_hits()
         await self.check_offline_joiners()
