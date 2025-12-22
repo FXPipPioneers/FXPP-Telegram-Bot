@@ -2188,13 +2188,13 @@ class TelegramTradingBot:
             f"**Want to try our VIP Group for FREE?**\n"
             f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
             f"**6+ high-quality trade signals per day**.\n\n"
-            f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
+            f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!"
         )
 
         # Try to send the message
         try:
-            # Resolve peer first
+            # Establish peer connection first
             await self.app.get_users([user_id])
             await asyncio.sleep(1)
             await self.app.send_message(user_id, welcome_msg)
@@ -2212,38 +2212,25 @@ class TelegramTradingBot:
             await self.log_to_debug(f"Owner sent welcome DM to user {user_id} via /sendwelcomedm widget")
         except Exception as e:
             error_str = str(e)
-            if "PEER_ID_INVALID" in error_str or "UserIsBlocked" in error_str:
-                # Add to retry queue
-                await self.track_failed_welcome_dm(user_id, f"User {user_id}", "welcome", welcome_msg)
-                if callback_query:
-                    await callback_query.message.edit_text(
-                        f"⚠️ **Peer Not Ready**\n\n"
-                        f"Could not send immediately, but added to retry queue.\n\n"
-                        f"The bot will automatically retry every 2 minutes (up to 5 attempts).\n\n"
-                        f"User ID: `{user_id}`"
-                    )
-                else:
-                    await user_message.reply(
-                        f"⚠️ **Peer Not Ready**\n\n"
-                        f"Could not send immediately, but added to retry queue.\n\n"
-                        f"The bot will automatically retry every 2 minutes (up to 5 attempts).\n\n"
-                        f"User ID: `{user_id}`"
-                    )
-                await self.log_to_debug(f"Added user {user_id} to welcome DM retry queue via /sendwelcomedm widget", is_error=True)
+            # Add to retry queue for any errors
+            await self.track_failed_welcome_dm(user_id, f"User {user_id}", "welcome", welcome_msg)
+            if callback_query:
+                await callback_query.message.edit_text(
+                    f"⚠️ **Could Not Send Immediately**\n\n"
+                    f"Added to automatic retry queue.\n\n"
+                    f"The bot will automatically retry every 2 minutes (up to 5 attempts).\n\n"
+                    f"User ID: `{user_id}`\n\n"
+                    f"You'll see a success message in debug channel when it goes through."
+                )
             else:
-                if callback_query:
-                    await callback_query.message.edit_text(
-                        f"❌ **Error**\n\n"
-                        f"Could not send DM to user **{user_id}**\n\n"
-                        f"Error: `{error_str[:100]}`"
-                    )
-                else:
-                    await user_message.reply(
-                        f"❌ **Error**\n\n"
-                        f"Could not send DM to user **{user_id}**\n\n"
-                        f"Error: `{error_str[:100]}`"
-                    )
-                await self.log_to_debug(f"Error sending welcome DM to user {user_id}: {error_str}", is_error=True)
+                await user_message.reply(
+                    f"⚠️ **Could Not Send Immediately**\n\n"
+                    f"Added to automatic retry queue.\n\n"
+                    f"The bot will automatically retry every 2 minutes (up to 5 attempts).\n\n"
+                    f"User ID: `{user_id}`\n\n"
+                    f"You'll see a success message in debug channel when it goes through."
+                )
+            await self.log_to_debug(f"Added user {user_id} to welcome DM retry queue via /sendwelcomedm widget (will retry automatically)", is_error=True)
         
         if callback_query:
             await callback_query.answer()
@@ -2976,36 +2963,22 @@ class TelegramTradingBot:
             f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!")
 
-        await asyncio.sleep(20)
+        # Establish peer connection: check at 0s, 7s, and send at 20s
+        await client.get_users([user.id])  # First check - instant
+        await asyncio.sleep(7)
+        await client.get_users([user.id])  # Second check - at 7 seconds
+        await asyncio.sleep(13)  # Wait until second 20
 
         try:
             await client.send_message(user.id, welcome_dm)
             await self.log_to_debug(
                 f"Sent welcome DM to {user.first_name} about VIP trial")
         except Exception as e:
-            error_str = str(e)
-            if "PEER_ID_INVALID" in error_str:
-                logger.warning(
-                    f"Peer not established yet for {user.first_name} (ID: {user.id}). Resolving peer...")
-                try:
-                    # Resolve the peer connection first
-                    await client.get_users([user.id])
-                    await asyncio.sleep(2)
-                    await client.send_message(user.id, welcome_dm)
-                    await self.log_to_debug(
-                        f"Sent welcome DM to {user.first_name} after peer resolution")
-                except Exception as retry_error:
-                    error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {retry_error}"
-                    logger.error(error_msg)
-                    await self.log_to_debug(error_msg, is_error=True)
-                    # Track for retry
-                    await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
-            else:
-                error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
-                logger.error(error_msg)
-                await self.log_to_debug(error_msg, is_error=True)
-                # Track for retry
-                await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
+            error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
+            logger.error(error_msg)
+            await self.log_to_debug(error_msg, is_error=True)
+            # Track for retry
+            await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
 
     async def handle_vip_group_join(self, client: Client, user, invite_link):
         """
@@ -3108,6 +3081,24 @@ class TelegramTradingBot:
         }
 
         await self.save_auto_role_config()
+
+        welcome_msg = (
+            f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
+            f"**access to the VIP Group for 3 trading days.** "
+            f"Your access will expire on {expiry_time.strftime('%A at %H:%M')}. "
+            f"Good luck trading!")
+
+        try:
+            await self.app.get_users([user.id])
+            await asyncio.sleep(1)
+            await self.app.send_message(user.id, welcome_msg)
+            await self.log_to_debug(
+                f"Sent trial welcome DM to {user.first_name} (expiring {expiry_time.strftime('%A at %H:%M')})")
+        except Exception as e:
+            error_msg = f"Could not send trial welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
+            logger.error(error_msg)
+            await self.log_to_debug(error_msg, is_error=True)
+            await self.track_failed_welcome_dm(user.id, user.first_name, "vip_trial", welcome_msg)
 
     async def get_working_api_for_pair(self, pair: str) -> str:
         pair_clean = pair.upper().replace("/",
@@ -4348,6 +4339,197 @@ class TelegramTradingBot:
         if offline_hits_found > 0:
             logger.info(f"Found and processed {offline_hits_found} TP/SL hits that occurred while offline")
 
+    async def check_offline_joiners(self):
+        """Recover and send welcome DMs to members who joined while bot was offline"""
+        if not self.db_pool or not FREE_GROUP_ID:
+            return
+        
+        try:
+            all_members = await self.app.get_chat_members(FREE_GROUP_ID)
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            missed_count = 0
+            
+            async with self.db_pool.acquire() as conn:
+                known_members = await conn.fetch('SELECT user_id FROM free_group_joins')
+                known_user_ids = {row['user_id'] for row in known_members}
+            
+            async for member in all_members:
+                if member.user.is_bot:
+                    continue
+                    
+                user_id = member.user.id
+                
+                if user_id not in known_user_ids:
+                    missed_count += 1
+                    
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute(
+                            '''INSERT INTO free_group_joins (user_id, joined_at, discount_sent)
+                               VALUES ($1, $2, FALSE)
+                               ON CONFLICT (user_id) DO NOTHING''',
+                            user_id, current_time)
+                    
+                    welcome_dm = (
+                        f"**Hey {member.user.first_name}, Welcome to FX Pip Pioneers!**\n\n"
+                        f"**Want to try our VIP Group for FREE?**\n"
+                        f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
+                        f"**6+ high-quality trade signals per day**.\n\n"
+                        f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
+                        f"Good luck trading!")
+                    
+                    try:
+                        await self.app.get_users([user_id])
+                        await asyncio.sleep(1)
+                        await self.app.send_message(user_id, welcome_dm)
+                        await self.log_to_debug(f"Sent missed welcome DM to {member.user.first_name} (joined while offline)")
+                    except Exception as e:
+                        await self.track_failed_welcome_dm(user_id, member.user.first_name, "free_group", welcome_dm)
+                        logger.warning(f"Could not send welcome DM to offline joiner {user_id}: {e}")
+            
+            if missed_count > 0:
+                await self.log_to_debug(f"✅ Recovered {missed_count} members who joined while bot was offline")
+        
+        except Exception as e:
+            logger.error(f"Error checking offline joiners: {e}")
+            await self.log_to_debug(f"Error recovering offline joiners: {e}", is_error=True)
+
+    async def check_offline_preexpiration_warnings(self):
+        """Recover and send missed 24h/3h pre-expiration warnings"""
+        current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+        recovered_warnings = 0
+        
+        try:
+            for member_id, data in list(AUTO_ROLE_CONFIG['active_members'].items()):
+                expiry_time = datetime.fromisoformat(data['expiry_time'])
+                if expiry_time.tzinfo is None:
+                    expiry_time = AMSTERDAM_TZ.localize(expiry_time)
+                
+                # Initialize flags if missing
+                if 'warning_24h_sent' not in data:
+                    data['warning_24h_sent'] = False
+                if 'warning_3h_sent' not in data:
+                    data['warning_3h_sent'] = False
+                
+                time_until_expiry = expiry_time - current_time
+                hours_left = time_until_expiry.total_seconds() / 3600
+                
+                # Check for missed 24-hour warning
+                if not data['warning_24h_sent'] and hours_left <= 24 and hours_left > 0:
+                    await self.send_24hr_warning(member_id)
+                    data['warning_24h_sent'] = True
+                    recovered_warnings += 1
+                
+                # Check for missed 3-hour warning
+                if not data['warning_3h_sent'] and hours_left <= 3 and hours_left > 0:
+                    await self.send_3hr_warning(member_id)
+                    data['warning_3h_sent'] = True
+                    recovered_warnings += 1
+            
+            if recovered_warnings > 0:
+                await self.log_to_debug(f"✅ Recovered {recovered_warnings} missed pre-expiration warnings")
+        
+        except Exception as e:
+            logger.error(f"Error checking offline preexpiration warnings: {e}")
+            await self.log_to_debug(f"Error recovering preexpiration warnings: {e}", is_error=True)
+
+    async def check_offline_followup_dms(self):
+        """Recover and send missed 3/7/14-day follow-up DMs"""
+        current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+        recovered_dms = 0
+        
+        try:
+            for member_id, data in list(AUTO_ROLE_CONFIG['dm_schedule'].items()):
+                role_expired = datetime.fromisoformat(data['role_expired'])
+                if role_expired.tzinfo is None:
+                    role_expired = AMSTERDAM_TZ.localize(role_expired)
+                
+                # Skip if user is VIP now
+                try:
+                    is_vip = await self.check_vip_membership(int(member_id))
+                    if is_vip:
+                        continue
+                except:
+                    pass
+                
+                dm_3_time = role_expired + timedelta(days=3)
+                dm_7_time = role_expired + timedelta(days=7)
+                dm_14_time = role_expired + timedelta(days=14)
+                
+                # Check for missed 3-day DM
+                if not data.get('dm_3_sent', False) and current_time >= dm_3_time:
+                    await self.send_followup_dm(member_id, 3)
+                    AUTO_ROLE_CONFIG['dm_schedule'][member_id]['dm_3_sent'] = True
+                    recovered_dms += 1
+                
+                # Check for missed 7-day DM
+                if not data.get('dm_7_sent', False) and current_time >= dm_7_time:
+                    await self.send_followup_dm(member_id, 7)
+                    AUTO_ROLE_CONFIG['dm_schedule'][member_id]['dm_7_sent'] = True
+                    recovered_dms += 1
+                
+                # Check for missed 14-day DM
+                if not data.get('dm_14_sent', False) and current_time >= dm_14_time:
+                    await self.send_followup_dm(member_id, 14)
+                    AUTO_ROLE_CONFIG['dm_schedule'][member_id]['dm_14_sent'] = True
+                    recovered_dms += 1
+            
+            if recovered_dms > 0:
+                await self.log_to_debug(f"✅ Recovered {recovered_dms} missed follow-up DMs")
+        
+        except Exception as e:
+            logger.error(f"Error checking offline followup DMs: {e}")
+            await self.log_to_debug(f"Error recovering followup DMs: {e}", is_error=True)
+
+    async def check_offline_engagement_discounts(self):
+        """Recover and send missed engagement discount DMs"""
+        if not self.db_pool:
+            return
+        
+        current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+        recovered_discounts = 0
+        
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Get users who should have received discount but didn't
+                joins = await conn.fetch(
+                    'SELECT user_id, joined_at, discount_sent FROM free_group_joins WHERE discount_sent = FALSE'
+                )
+            
+            for join_row in joins:
+                user_id = join_row['user_id']
+                joined_at = join_row['joined_at']
+                
+                two_weeks_ago = joined_at + timedelta(days=14)
+                if current_time < two_weeks_ago:
+                    continue
+                
+                # Count reactions after 2-week mark
+                async with self.db_pool.acquire() as conn:
+                    reaction_count = await conn.fetchval(
+                        '''SELECT COUNT(DISTINCT message_id) FROM emoji_reactions
+                           WHERE user_id = $1 AND reaction_time > $2''',
+                        user_id, two_weeks_ago
+                    )
+                
+                # If qualified, send discount DM
+                if reaction_count >= 5:
+                    await self.send_engagement_discount_dm(user_id)
+                    
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute(
+                            'UPDATE free_group_joins SET discount_sent = TRUE WHERE user_id = $1',
+                            user_id
+                        )
+                    
+                    recovered_discounts += 1
+            
+            if recovered_discounts > 0:
+                await self.log_to_debug(f"✅ Recovered {recovered_discounts} missed engagement discount DMs")
+        
+        except Exception as e:
+            logger.error(f"Error checking offline engagement discounts: {e}")
+            await self.log_to_debug(f"Error recovering engagement discounts: {e}", is_error=True)
+
     async def price_tracking_loop(self):
         await asyncio.sleep(10)
 
@@ -4840,6 +5022,10 @@ class TelegramTradingBot:
                 logger.error(f"Could not send startup message: {e}")
 
         await self.check_offline_tp_sl_hits()
+        await self.check_offline_joiners()
+        await self.check_offline_preexpiration_warnings()
+        await self.check_offline_followup_dms()
+        await self.check_offline_engagement_discounts()
 
         asyncio.create_task(self.price_tracking_loop())
         asyncio.create_task(self.trial_expiry_loop())
