@@ -3263,11 +3263,17 @@ class TelegramTradingBot:
                 return False
             
             # Try to fetch the message from the group
-            await self.app.get_messages(int(chat_id), int(message_id))
+            message = await self.app.get_messages(int(chat_id), int(message_id))
+            return message is not None
+        except Exception as e:
+            # Only treat as deleted if it's a specific "not found" error
+            error_str = str(e).lower()
+            if "not found" in error_str or "message_id_invalid" in error_str:
+                return False
+            # For any other error (network, permissions, etc), assume message still exists
+            # This prevents false deletions due to transient issues
+            logger.debug(f"Error checking message {message_id}: {e}, assuming it still exists")
             return True
-        except Exception:
-            # Message was deleted or doesn't exist
-            return False
 
     async def check_single_trade_immediately(self, message_id: str,
                                              trade_data: dict):
@@ -4271,6 +4277,71 @@ class TelegramTradingBot:
             logger.error(f"Error removing trade from database: {e}")
             await self.log_to_debug(f"Error removing trade {message_id}: {e}")
 
+    async def restore_trades_from_completed(self, reason_filter: str = "message_deleted"):
+        """Restore trades that were incorrectly moved to completed_trades"""
+        if not self.db_pool:
+            return []
+
+        restored = []
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Get trades marked as deleted
+                trades = await conn.fetch(
+                    'SELECT * FROM completed_trades WHERE completion_reason = $1',
+                    reason_filter)
+
+                for trade in trades:
+                    try:
+                        # Re-insert into active_trades
+                        await conn.execute(
+                            '''INSERT INTO active_trades (
+                                message_id, channel_id, guild_id, pair, action,
+                                entry_price, tp1_price, tp2_price, tp3_price, sl_price,
+                                telegram_entry, telegram_tp1, telegram_tp2, telegram_tp3,
+                                telegram_sl, live_entry, assigned_api, status, tp_hits,
+                                breakeven_active, entry_type, manual_overrides, channel_message_map,
+                                all_channel_ids, created_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)''',
+                            trade['message_id'], trade['channel_id'], trade['guild_id'],
+                            trade['pair'], trade['action'], trade['entry_price'],
+                            trade['tp1_price'], trade['tp2_price'], trade['tp3_price'],
+                            trade['sl_price'], trade['telegram_entry'], trade['telegram_tp1'],
+                            trade['telegram_tp2'], trade['telegram_tp3'], trade['telegram_sl'],
+                            trade['live_entry'], trade['assigned_api'], 'active',
+                            trade['tp_hits'], trade['breakeven_active'], trade['entry_type'],
+                            trade['manual_overrides'], trade['channel_message_map'],
+                            trade['all_channel_ids'], trade['created_at'])
+
+                        # Remove from completed_trades
+                        await conn.execute(
+                            'DELETE FROM completed_trades WHERE message_id = $1',
+                            trade['message_id'])
+
+                        restored.append(trade['message_id'])
+                        # Reload into memory
+                        PRICE_TRACKING_CONFIG['active_trades'][trade['message_id']] = {
+                            'pair': trade['pair'],
+                            'action': trade['action'],
+                            'entry': float(trade['entry_price']),
+                            'tp1_price': float(trade['tp1_price']),
+                            'tp2_price': float(trade['tp2_price']),
+                            'tp3_price': float(trade['tp3_price']),
+                            'sl_price': float(trade['sl_price']),
+                            'group_id': trade['guild_id'],
+                            'status': 'active',
+                            'tp_hits': trade['tp_hits'].split(',') if trade['tp_hits'] else []
+                        }
+
+                        logger.info(f"✅ Restored trade {trade['message_id']} ({trade['pair']})")
+                    except Exception as e:
+                        logger.error(f"Error restoring trade {trade['message_id']}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error restoring trades: {e}")
+
+        return restored
+
     def is_weekend_market_closed(self) -> bool:
         amsterdam_now = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
         weekday = amsterdam_now.weekday()
@@ -4630,12 +4701,6 @@ class TelegramTradingBot:
                 for message_id, trade_data in trades.items():
                     if message_id not in PRICE_TRACKING_CONFIG[
                             'active_trades']:
-                        continue
-
-                    # Check if message still exists (cleanup deleted signals)
-                    if not await self.check_message_still_exists(message_id, trade_data):
-                        await self.remove_trade_from_db(message_id, "message_deleted")
-                        logger.info(f"📝 Signal message {message_id} was deleted - removed from tracking")
                         continue
 
                     await self.check_price_levels(message_id, trade_data)
@@ -5121,6 +5186,20 @@ class TelegramTradingBot:
                     "**Bot Started!** Trading bot is now online and ready.")
             except Exception as e:
                 logger.error(f"Could not send startup message: {e}")
+
+        # Restore any trades that were incorrectly marked as deleted
+        restored_trades = await self.restore_trades_from_completed("message_deleted")
+        if restored_trades:
+            logger.info(f"✅ Restored {len(restored_trades)} trades that were incorrectly marked as deleted")
+            try:
+                if DEBUG_GROUP_ID:
+                    await self.app.send_message(
+                        DEBUG_GROUP_ID,
+                        f"✅ **Recovery Complete:** Restored {len(restored_trades)} trades:\n" +
+                        "\n".join([f"- Message ID: {mid}" for mid in restored_trades[:5]]) +
+                        (f"\n... and {len(restored_trades) - 5} more" if len(restored_trades) > 5 else ""))
+            except Exception as e:
+                logger.error(f"Could not send recovery message: {e}")
 
         await self.check_offline_tp_sl_hits()
         await self.check_offline_joiners()
