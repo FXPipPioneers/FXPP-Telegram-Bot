@@ -4292,6 +4292,10 @@ class TelegramTradingBot:
 
                 for trade in trades:
                     try:
+                        # Use .get() with defaults for fields that may not exist in older records
+                        channel_message_map = trade.get('channel_message_map', '')
+                        all_channel_ids = trade.get('all_channel_ids', '')
+                        
                         # Re-insert into active_trades
                         await conn.execute(
                             '''INSERT INTO active_trades (
@@ -4306,12 +4310,12 @@ class TelegramTradingBot:
                             trade['message_id'], trade['channel_id'], trade['guild_id'],
                             trade['pair'], trade['action'], trade['entry_price'],
                             trade['tp1_price'], trade['tp2_price'], trade['tp3_price'],
-                            trade['sl_price'], trade['telegram_entry'], trade['telegram_tp1'],
-                            trade['telegram_tp2'], trade['telegram_tp3'], trade['telegram_sl'],
-                            trade['live_entry'], trade['assigned_api'], 'active',
-                            trade['tp_hits'], trade['breakeven_active'], trade['entry_type'],
-                            trade['manual_overrides'], trade['channel_message_map'],
-                            trade['all_channel_ids'], trade['created_at'])
+                            trade['sl_price'], trade.get('telegram_entry'), trade.get('telegram_tp1'),
+                            trade.get('telegram_tp2'), trade.get('telegram_tp3'), trade.get('telegram_sl'),
+                            trade.get('live_entry'), trade.get('assigned_api', 'currencybeacon'), 'active',
+                            trade.get('tp_hits', ''), trade.get('breakeven_active', False), trade.get('entry_type'),
+                            trade.get('manual_overrides', ''), channel_message_map,
+                            all_channel_ids, trade['created_at'])
 
                         # Remove from completed_trades
                         await conn.execute(
@@ -4330,7 +4334,7 @@ class TelegramTradingBot:
                             'sl_price': float(trade['sl_price']),
                             'group_id': trade['guild_id'],
                             'status': 'active',
-                            'tp_hits': trade['tp_hits'].split(',') if trade['tp_hits'] else []
+                            'tp_hits': trade.get('tp_hits', '').split(',') if trade.get('tp_hits') else []
                         }
 
                         logger.info(f"✅ Restored trade {trade['message_id']} ({trade['pair']})")
