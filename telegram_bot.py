@@ -3255,12 +3255,33 @@ class TelegramTradingBot:
 
         return None
 
+    async def check_message_still_exists(self, message_id: str, trade_data: dict) -> bool:
+        """Check if the original trading signal message still exists in Telegram"""
+        try:
+            chat_id = trade_data.get('group_id')
+            if not chat_id:
+                return False
+            
+            # Try to fetch the message from the group
+            await self.app.get_messages(int(chat_id), int(message_id))
+            return True
+        except Exception:
+            # Message was deleted or doesn't exist
+            return False
+
     async def check_single_trade_immediately(self, message_id: str,
                                              trade_data: dict):
         await asyncio.sleep(5)
         await self.check_price_levels(message_id, trade_data)
 
     async def check_price_levels(self, message_id: str, trade_data: dict):
+        # First check if the original message still exists (cleanup deleted signals)
+        if not await self.check_message_still_exists(message_id, trade_data):
+            await self.remove_trade_from_db(message_id, "message_deleted")
+            if message_id in PRICE_TRACKING_CONFIG['active_trades']:
+                del PRICE_TRACKING_CONFIG['active_trades'][message_id]
+            return
+        
         pair = trade_data.get('pair')
         action = trade_data.get('action')
         tp1 = trade_data.get('tp1_price')
@@ -4609,6 +4630,12 @@ class TelegramTradingBot:
                 for message_id, trade_data in trades.items():
                     if message_id not in PRICE_TRACKING_CONFIG[
                             'active_trades']:
+                        continue
+
+                    # Check if message still exists (cleanup deleted signals)
+                    if not await self.check_message_still_exists(message_id, trade_data):
+                        await self.remove_trade_from_db(message_id, "message_deleted")
+                        logger.info(f"📝 Signal message {message_id} was deleted - removed from tracking")
                         continue
 
                     await self.check_price_levels(message_id, trade_data)
