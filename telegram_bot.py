@@ -1791,100 +1791,66 @@ class TelegramTradingBot:
                 try:
                     if action_type == 'slhit':
                         trade['status'] = 'closed (sl hit - manual override)'
-                        await self.send_sl_notification(
-                            full_msg_id, trade, trade.get('sl_price', 0))
-                        del PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
-                        await self.remove_trade_from_db(
-                            full_msg_id, 'manual_sl_hit')
-                        successful_trades.append(
-                            f"{pair} {action}{group_label} - SL Hit")
+                        await self.remove_trade_from_db(full_msg_id, 'manual_sl_hit')
+                        await self.send_sl_notification(full_msg_id, trade, trade.get('sl_price', 0))
+                        successful_trades.append(f"{pair} {action}{group_label} - SL Hit")
 
                     elif action_type == 'tp1hit':
                         if 'TP1' not in trade.get('tp_hits', []):
                             trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
                         trade['status'] = 'active (tp1 hit - manual override)'
                         await self.update_trade_in_db(full_msg_id, trade)
-                        await self.send_tp_notification(
-                            full_msg_id, trade, 'TP1',
-                            trade.get('tp1_price', 0))
-                        successful_trades.append(
-                            f"{pair} {action}{group_label} - TP1 Hit")
+                        await self.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
+                        successful_trades.append(f"{pair} {action}{group_label} - TP1 Hit")
 
                     elif action_type == 'tp2hit':
                         current_tp_hits = trade.get('tp_hits', [])
                         if 'TP1' not in current_tp_hits:
                             trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
                             await self.update_trade_in_db(full_msg_id, trade)
-                            await self.send_tp_notification(
-                                full_msg_id, trade, 'TP1',
-                                trade.get('tp1_price', 0))
+                            await self.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
                             await asyncio.sleep(1)
                         
-                        current_tp_hits = trade.get('tp_hits', [])
-                        if 'TP2' not in current_tp_hits:
+                        if 'TP2' not in trade.get('tp_hits', []):
                             trade['tp_hits'] = trade.get('tp_hits', []) + ['TP2']
                         trade['breakeven_active'] = True
                         trade['status'] = 'active (tp2 hit - manual override - breakeven active)'
                         await self.update_trade_in_db(full_msg_id, trade)
-                        await self.send_tp_notification(
-                            full_msg_id, trade, 'TP2',
-                            trade.get('tp2_price', 0))
-                        successful_trades.append(
-                            f"{pair} {action}{group_label} - TP2 Hit")
+                        await self.send_tp_notification(full_msg_id, trade, 'TP2', trade.get('tp2_price', 0))
+                        successful_trades.append(f"{pair} {action}{group_label} - TP2 Hit")
 
                     elif action_type == 'tp3hit':
                         current_tp_hits = trade.get('tp_hits', [])
                         if 'TP1' not in current_tp_hits:
                             trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
                             await self.update_trade_in_db(full_msg_id, trade)
-                            await self.send_tp_notification(
-                                full_msg_id, trade, 'TP1',
-                                trade.get('tp1_price', 0))
+                            await self.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
                             await asyncio.sleep(1)
                         
-                        current_tp_hits = trade.get('tp_hits', [])
-                        if 'TP2' not in current_tp_hits:
+                        if 'TP2' not in trade.get('tp_hits', []):
                             trade['tp_hits'] = trade.get('tp_hits', []) + ['TP2']
                             trade['breakeven_active'] = True
                             await self.update_trade_in_db(full_msg_id, trade)
-                            await self.send_tp_notification(
-                                full_msg_id, trade, 'TP2',
-                                trade.get('tp2_price', 0))
+                            await self.send_tp_notification(full_msg_id, trade, 'TP2', trade.get('tp2_price', 0))
                             await asyncio.sleep(1)
-                            
-                        current_tp_hits = trade.get('tp_hits', [])
-                        if 'TP3' not in current_tp_hits:
+                        
+                        if 'TP3' not in trade.get('tp_hits', []):
                             trade['tp_hits'] = trade.get('tp_hits', []) + ['TP3']
                         trade['status'] = 'completed (tp3 hit - manual override)'
-                        await self.update_trade_in_db(full_msg_id, trade)
-                        await self.send_tp_notification(
-                            full_msg_id, trade, 'TP3',
-                            trade.get('tp3_price', 0))
-                        del PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
-                        await self.remove_trade_from_db(
-                            full_msg_id, 'manual_tp3_hit')
-                        successful_trades.append(
-                            f"{pair} {action}{group_label} - TP3 Hit")
+                        await self.remove_trade_from_db(full_msg_id, 'manual_tp3_hit')
+                        await self.send_tp_notification(full_msg_id, trade, 'TP3', trade.get('tp3_price', 0))
+                        successful_trades.append(f"{pair} {action}{group_label} - TP3 Hit")
 
                     elif action_type == 'behit':
-                        trade[
-                            'status'] = 'closed (breakeven after tp2 - manual override)'
-                        await self.send_breakeven_notification(
-                            full_msg_id, trade)
-                        del PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
-                        await self.remove_trade_from_db(
-                            full_msg_id, 'manual_breakeven_hit')
-                        successful_trades.append(
-                            f"{pair} {action}{group_label} - Breakeven After TP2"
-                        )
+                        trade['status'] = 'closed (breakeven after tp2 - manual override)'
+                        await self.remove_trade_from_db(full_msg_id, 'manual_breakeven_hit')
+                        await self.send_breakeven_notification(full_msg_id, trade)
+                        successful_trades.append(f"{pair} {action}{group_label} - Breakeven After TP2")
 
                     elif action_type == 'endhit':
                         trade['status'] = 'closed (ended by manual override)'
-                        del PRICE_TRACKING_CONFIG['active_trades'][full_msg_id]
-                        await self.remove_trade_from_db(
-                            full_msg_id, 'manual_end_tracking')
-                        successful_trades.append(
-                            f"{pair} {action}{group_label} - Tracking Ended")
+                        await self.remove_trade_from_db(full_msg_id, 'manual_end_tracking')
+                        successful_trades.append(f"{pair} {action}{group_label} - Tracking Ended")
 
                 except Exception as e:
                     failed_trades.append(f"{pair}: {str(e)[:30]}")
