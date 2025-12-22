@@ -440,29 +440,6 @@ class TelegramTradingBot:
                 asyncio.create_task(self._fetch_and_store_reactions(message))
             except Exception as e:
                 logger.debug(f"Error scheduling reaction fetch: {e}")
-        
-        @self.app.on_message_deleted()
-        async def handle_message_deleted(client, message: Message):
-            """Handle deleted messages - remove corresponding trades from tracking"""
-            # Check all active trades to see if any match this deleted message
-            trades_to_remove = []
-            for trade_key, trade_data in list(PRICE_TRACKING_CONFIG['active_trades'].items()):
-                chat_id = trade_data.get('chat_id') or trade_data.get('channel_id')
-                message_id = trade_data.get('message_id')
-                
-                # Check if this trade matches the deleted message
-                if chat_id == message.chat.id and (message_id == str(message.id) or trade_key.endswith(f"_{message.id}")):
-                    trades_to_remove.append(trade_key)
-            
-            # Remove all matching trades
-            for trade_key in trades_to_remove:
-                try:
-                    message_id = PRICE_TRACKING_CONFIG['active_trades'][trade_key].get('message_id')
-                    await self.remove_trade_from_db(trade_key, "message_deleted")
-                    del PRICE_TRACKING_CONFIG['active_trades'][trade_key]
-                    logger.info(f"Removed trade {trade_key} due to message deletion")
-                except Exception as e:
-                    logger.error(f"Error removing deleted trade {trade_key}: {e}")
 
     async def _fetch_and_store_reactions(self, message: Message):
         """Fetch actual users who reacted and store individually for engagement tracking"""
@@ -478,17 +455,19 @@ class TelegramTradingBot:
                     emoji_str = str(reaction.emoji) if hasattr(reaction, 'emoji') else str(reaction)
                     
                     try:
-                        # Get list of users who reacted with this emoji
-                        async for reactor in self.app.get_reaction_users(
-                            FREE_GROUP_ID, message.id, emoji_str):
-                            
-                            # Store INDIVIDUAL user reaction
-                            await conn.execute(
-                                '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
-                                   VALUES ($1, $2, $3, $4)
-                                   ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
-                                reactor.id, message.id, emoji_str, current_time
-                            )
+                        # Note: Pyrogram may not support get_reaction_users for all account types
+                        # This is a placeholder for potential future Telegram API support
+                        if hasattr(self.app, 'get_reaction_users'):
+                            async for reactor in self.app.get_reaction_users(
+                                FREE_GROUP_ID, message.id, emoji_str):
+                                
+                                # Store INDIVIDUAL user reaction
+                                await conn.execute(
+                                    '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
+                                       VALUES ($1, $2, $3, $4)
+                                       ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
+                                    reactor.id, message.id, emoji_str, current_time
+                                )
                     except Exception as e:
                         logger.debug(f"Error fetching reactors for emoji {emoji_str}: {e}")
         except Exception as e:
@@ -2193,17 +2172,20 @@ class TelegramTradingBot:
         """Handle user ID input for sendwelcomedm widget"""
         pass
 
-    async def execute_send_welcome_dm(self, callback_query: CallbackQuery, menu_id: str, context: dict, user_message: Message = None):
+    async def execute_send_welcome_dm(self, callback_query = None, menu_id: str = "", context: dict = None, user_message: Message = None):
         """Execute the actual welcome DM send"""
+        if context is None:
+            context = {}
         user_id = context.get('user_id')
 
         if not user_id:
             if callback_query:
                 await callback_query.message.edit_text("❌ Missing user ID.")
                 await callback_query.answer()
-            else:
+            elif user_message:
                 await user_message.reply("❌ Missing user ID.")
-            self.sendwelcomedm_context.pop(menu_id, None)
+            if menu_id:
+                self.sendwelcomedm_context.pop(menu_id, None)
             return
 
         # Prepare the welcome message
@@ -2904,9 +2886,9 @@ class TelegramTradingBot:
                         f"Unfortunately, our free trial can only be used once per person. Your trial has already ran out, so we can't give you another.\n\n"
                         f"We truly hope that you were able to profit with us during your free trial. If you were happy with the results you got, then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
                     )
-                    await client.send_message(user_id,
-                                              rejection_dm,
-                                              disable_web_page_preview=True)
+                    await self.app.send_message(user_id,
+                                                rejection_dm,
+                                                disable_web_page_preview=True)
                     logger.info(f"Sent rejection DM to {user_name}")
                 except Exception as e:
                     logger.error(
@@ -2987,29 +2969,13 @@ class TelegramTradingBot:
             f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!")
 
-        # Multi-Check Peer Establishment (3-point system):
-        # Check 1: Instant (second 0) when member joins
-        try:
-            await client.get_users([user.id])
-            logger.info(f"Peer established immediately for {user.first_name} (Check 1)")
-        except Exception as e:
-            logger.debug(f"Peer Check 1 failed for {user.first_name}: {str(e)[:50]}")
-
-        # Check 2: After 7 seconds to reinforce connection
-        await asyncio.sleep(7)
-        try:
-            await client.get_users([user.id])
-            logger.info(f"Peer confirmed for {user.first_name} (Check 2)")
-        except Exception as e:
-            logger.debug(f"Peer Check 2 failed for {user.first_name}: {str(e)[:50]}")
-
-        # Send DM: At second 20 after guaranteed peer establishment
-        await asyncio.sleep(13)  # 7 + 13 = 20 seconds total
+        # Wait 20 seconds for the user to see the welcome message in chat before sending DM
+        await asyncio.sleep(20)
 
         try:
-            await client.send_message(user.id, welcome_dm)
+            await self.app.send_message(user.id, welcome_dm)
             await self.log_to_debug(
-                f"Sent welcome DM to {user.first_name} about VIP trial")
+                f"✅ Sent welcome DM to {user.first_name} about VIP trial")
         except Exception as e:
             error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
             logger.error(error_msg)
@@ -3126,11 +3092,9 @@ class TelegramTradingBot:
             f"Good luck trading!")
 
         try:
-            await self.app.get_users([user.id])
-            await asyncio.sleep(1)
             await self.app.send_message(user.id, welcome_msg)
             await self.log_to_debug(
-                f"Sent trial welcome DM to {user.first_name} (expiring {expiry_time.strftime('%A at %H:%M')})")
+                f"✅ Sent trial welcome DM to {user.first_name} (expiring {expiry_time.strftime('%A at %H:%M')})")
         except Exception as e:
             error_msg = f"Could not send trial welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
             logger.error(error_msg)
@@ -3462,6 +3426,7 @@ class TelegramTradingBot:
         del PRICE_TRACKING_CONFIG['active_trades'][message_id]
         await self.remove_trade_from_db(message_id, 'breakeven_hit')
 
+        entry_price = trade.get('entry_price', 0)
         await self.log_to_debug(
             f"{trade['pair']} {trade['action']} hit breakeven @ {entry_price:.5f}"
         )
@@ -4485,7 +4450,6 @@ class TelegramTradingBot:
             return
         
         try:
-            all_members = self.app.get_chat_members(FREE_GROUP_ID)
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
             missed_count = 0
             
@@ -4493,7 +4457,7 @@ class TelegramTradingBot:
                 known_members = await conn.fetch('SELECT user_id FROM free_group_joins')
                 known_user_ids = {row['user_id'] for row in known_members}
             
-            async for member in all_members:
+            async for member in self.app.get_chat_members(FREE_GROUP_ID):
                 if member.user.is_bot:
                     continue
                     
