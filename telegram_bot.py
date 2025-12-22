@@ -2961,19 +2961,39 @@ class TelegramTradingBot:
             f"**Want to try our VIP Group for FREE?**\n"
             f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
             f"**6+ high-quality trade signals per day**.\n\n"
-            f"**Activate your free trial here:** https://t.me/+5X18tTjgM042ODU0\n\n"
+            f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
             f"Good luck trading!")
 
-        # Establish peer connection: check at 0s, 7s, and send at 20s
-        await client.get_users([user.id])  # First check - instant
-        await asyncio.sleep(7)
-        await client.get_users([user.id])  # Second check - at 7 seconds
-        await asyncio.sleep(13)  # Wait until second 20
+        # Wait 8 minutes before starting peer connection checks
+        await asyncio.sleep(480)
+
+        # Establish peer connection: repeatedly try for 7 minutes (420 seconds) with checks every 10 seconds
+        max_wait_seconds = 420
+        check_interval = 10  # Check every 10 seconds
+        elapsed = 0
+        peer_established = False
+        
+        while elapsed < max_wait_seconds and not peer_established:
+            try:
+                await client.get_users([user.id])
+                peer_established = True
+                logger.info(f"Peer established for {user.first_name} after {480 + elapsed} seconds total")
+                break
+            except Exception as e:
+                logger.debug(f"Peer check for {user.first_name} at {480 + elapsed}s: {str(e)[:50]}")
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
 
         try:
-            await client.send_message(user.id, welcome_dm)
-            await self.log_to_debug(
-                f"Sent welcome DM to {user.first_name} about VIP trial")
+            if peer_established:
+                await client.send_message(user.id, welcome_dm)
+                await self.log_to_debug(
+                    f"Sent welcome DM to {user.first_name} about VIP trial")
+            else:
+                error_msg = f"Could not establish peer connection for {user.first_name} after 15 minutes, will retry in 2 minutes"
+                logger.error(error_msg)
+                await self.log_to_debug(error_msg, is_error=True)
+                await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
         except Exception as e:
             error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
             logger.error(error_msg)
