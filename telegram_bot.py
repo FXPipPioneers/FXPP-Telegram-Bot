@@ -440,6 +440,29 @@ class TelegramTradingBot:
                 asyncio.create_task(self._fetch_and_store_reactions(message))
             except Exception as e:
                 logger.debug(f"Error scheduling reaction fetch: {e}")
+        
+        @self.app.on_message_deleted()
+        async def handle_message_deleted(client, message: Message):
+            """Handle deleted messages - remove corresponding trades from tracking"""
+            # Check all active trades to see if any match this deleted message
+            trades_to_remove = []
+            for trade_key, trade_data in list(PRICE_TRACKING_CONFIG['active_trades'].items()):
+                chat_id = trade_data.get('chat_id') or trade_data.get('channel_id')
+                message_id = trade_data.get('message_id')
+                
+                # Check if this trade matches the deleted message
+                if chat_id == message.chat.id and (message_id == str(message.id) or trade_key.endswith(f"_{message.id}")):
+                    trades_to_remove.append(trade_key)
+            
+            # Remove all matching trades
+            for trade_key in trades_to_remove:
+                try:
+                    message_id = PRICE_TRACKING_CONFIG['active_trades'][trade_key].get('message_id')
+                    await self.remove_trade_from_db(trade_key, "message_deleted")
+                    del PRICE_TRACKING_CONFIG['active_trades'][trade_key]
+                    logger.info(f"Removed trade {trade_key} due to message deletion")
+                except Exception as e:
+                    logger.error(f"Error removing deleted trade {trade_key}: {e}")
 
     async def _fetch_and_store_reactions(self, message: Message):
         """Fetch actual users who reacted and store individually for engagement tracking"""
@@ -3258,12 +3281,18 @@ class TelegramTradingBot:
     async def check_message_still_exists(self, message_id: str, trade_data: dict) -> bool:
         """Check if the original trading signal message still exists in Telegram"""
         try:
-            chat_id = trade_data.get('group_id')
+            # Try chat_id first (main field), then fall back to channel_id
+            chat_id = trade_data.get('chat_id') or trade_data.get('channel_id')
             if not chat_id:
                 return False
             
+            # Extract actual message ID from the trade_key if needed
+            actual_message_id = message_id
+            if '_' in str(message_id):
+                actual_message_id = str(message_id).split('_', 1)[1]
+            
             # Try to fetch the message from the group
-            message = await self.app.get_messages(int(chat_id), int(message_id))
+            message = await self.app.get_messages(int(chat_id), int(actual_message_id))
             return message is not None
         except Exception as e:
             # Only treat as deleted if it's a specific "not found" error
@@ -3284,6 +3313,7 @@ class TelegramTradingBot:
         # First check if the original message still exists (cleanup deleted signals)
         if not await self.check_message_still_exists(message_id, trade_data):
             await self.remove_trade_from_db(message_id, "message_deleted")
+            # Remove using trade_key format (chat_id_message_id)
             if message_id in PRICE_TRACKING_CONFIG['active_trades']:
                 del PRICE_TRACKING_CONFIG['active_trades'][message_id]
             return
@@ -5191,19 +5221,9 @@ class TelegramTradingBot:
             except Exception as e:
                 logger.error(f"Could not send startup message: {e}")
 
-        # Restore any trades that were incorrectly marked as deleted
-        restored_trades = await self.restore_trades_from_completed("message_deleted")
-        if restored_trades:
-            logger.info(f"✅ Restored {len(restored_trades)} trades that were incorrectly marked as deleted")
-            try:
-                if DEBUG_GROUP_ID:
-                    await self.app.send_message(
-                        DEBUG_GROUP_ID,
-                        f"✅ **Recovery Complete:** Restored {len(restored_trades)} trades:\n" +
-                        "\n".join([f"- Message ID: {mid}" for mid in restored_trades[:5]]) +
-                        (f"\n... and {len(restored_trades) - 5} more" if len(restored_trades) > 5 else ""))
-            except Exception as e:
-                logger.error(f"Could not send recovery message: {e}")
+        # NOTE: DO NOT restore trades marked as "message_deleted" - if a user deleted a signal, respect that deletion
+        # Previous versions had this logic and it caused deleted trades to reappear on restart
+        logger.info("Trade restoration skipped - respecting user deletions")
 
         await self.check_offline_tp_sl_hits()
         await self.check_offline_joiners()
