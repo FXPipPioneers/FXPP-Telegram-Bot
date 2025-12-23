@@ -4379,6 +4379,8 @@ class TelegramTradingBot:
                         trade_key,
                         'chat_id':
                         chat_id,
+                        'group_id':
+                        chat_id,
                         'pair':
                         row['pair'],
                         'action':
