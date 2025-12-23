@@ -365,6 +365,10 @@ class TelegramTradingBot:
         async def send_welcome_dm_command(client, message: Message):
             await self.handle_send_welcome_dm(client, message)
 
+        @self.app.on_message(filters.command("newmemberslist"))
+        async def newmemberslist_command(client, message: Message):
+            await self.handle_newmemberslist(client, message)
+
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
             await self.process_join_request(client, join_request)
@@ -403,17 +407,21 @@ class TelegramTradingBot:
         async def sendwelcomedm_callback(client, callback_query: CallbackQuery):
             await self.handle_sendwelcomedm_callback(client, callback_query)
 
+        @self.app.on_callback_query(filters.regex("^nml_"))
+        async def newmemberslist_callback(client, callback_query: CallbackQuery):
+            await self._handle_newmemberslist_callback(client, callback_query)
+
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm"
+                "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist"
             ]))
         async def text_input_handler(client, message: Message):
             await self.handle_text_input(client, message)
 
         @self.app.on_message(filters.group & filters.text & ~filters.command([
             "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
-            "dmstatus", "freetrialusers", "sendwelcomedm"
+            "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist"
         ]))
         async def group_message_handler(client, message: Message):
             await self.handle_group_message(client, message)
@@ -2142,6 +2150,128 @@ class TelegramTradingBot:
     async def handle_sendwelcomedm_user_input(self, client: Client, message: Message):
         """Handle user ID input for sendwelcomedm widget"""
         pass
+
+    async def handle_newmemberslist(self, client: Client, message: Message):
+        """Show new members list with subcommands for free group joiners and VIP trial activations"""
+        if not await self.is_owner(message.from_user.id):
+            await message.reply("This command is restricted to the bot owner.")
+            return
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👥 Free Group Joiners", callback_data="nml_free_group")],
+            [InlineKeyboardButton("⭐ VIP Trial Joiners", callback_data="nml_vip_trial")],
+            [InlineKeyboardButton("❌ Close", callback_data="nml_close")]
+        ])
+
+        await message.reply(
+            "**New Members Tracking**\n\n"
+            "Select an option to view member data:\n\n"
+            "📊 **Free Group Joiners** - Shows all free group joiners grouped by week\n"
+            "⭐ **VIP Trial Joiners** - Shows members with active VIP trial and days remaining",
+            reply_markup=keyboard
+        )
+
+    async def _handle_newmemberslist_callback(self, client: Client, callback_query: CallbackQuery):
+        """Handle newmemberslist subcommand callbacks"""
+        if not await self.is_owner(callback_query.from_user.id):
+            await callback_query.answer("Restricted to bot owner.", show_alert=True)
+            return
+
+        data = callback_query.data
+
+        if data == "nml_close":
+            await callback_query.message.edit_text("❌ Closed.")
+            await callback_query.answer()
+            return
+
+        if data == "nml_free_group":
+            await self._show_free_group_joiners(callback_query)
+        elif data == "nml_vip_trial":
+            await self._show_vip_trial_joiners(callback_query)
+
+    async def _show_free_group_joiners(self, callback_query: CallbackQuery):
+        """Show free group joiners grouped by week"""
+        if not self.db_pool:
+            await callback_query.message.edit_text("❌ Database not available")
+            await callback_query.answer()
+            return
+
+        try:
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            monday = current_time - timedelta(days=current_time.weekday())
+            sunday = monday + timedelta(days=6)
+
+            async with self.db_pool.acquire() as conn:
+                joins = await conn.fetch(
+                    '''SELECT user_id, joined_at FROM free_group_joins 
+                       WHERE joined_at >= $1 AND joined_at <= $2
+                       ORDER BY joined_at DESC''',
+                    monday, sunday
+                )
+
+            if not joins:
+                await callback_query.message.edit_text(
+                    f"**Free Group Joiners - This Week**\n\n"
+                    f"Monday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n\n"
+                    f"No new joiners this week."
+                )
+                await callback_query.answer()
+                return
+
+            joiners_by_date = {}
+            for row in joins:
+                date_key = row['joined_at'].strftime('%d-%m-%Y')
+                if date_key not in joiners_by_date:
+                    joiners_by_date[date_key] = []
+                joiners_by_date[date_key].append(f"User {row['user_id']}")
+
+            text = f"**Free Group Joiners - This Week**\n\nMonday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n\n"
+            for date in sorted(joiners_by_date.keys(), reverse=True):
+                users = ", ".join(joiners_by_date[date])
+                text += f"**{date}:** {users}\n"
+
+            await callback_query.message.edit_text(text)
+            await callback_query.answer()
+        except Exception as e:
+            await callback_query.message.edit_text(f"❌ Error: {str(e)}")
+            await callback_query.answer()
+
+    async def _show_vip_trial_joiners(self, callback_query: CallbackQuery):
+        """Show VIP trial joiners with days remaining"""
+        if not self.db_pool:
+            await callback_query.message.edit_text("❌ Database not available")
+            await callback_query.answer()
+            return
+
+        try:
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+
+            async with self.db_pool.acquire() as conn:
+                trials = await conn.fetch(
+                    '''SELECT user_id, activation_date, expiry_date FROM vip_trial_activations
+                       WHERE expiry_date > $1
+                       ORDER BY expiry_date ASC''',
+                    current_time
+                )
+
+            if not trials:
+                await callback_query.message.edit_text("**VIP Trial Joiners**\n\nNo active VIP trials.")
+                await callback_query.answer()
+                return
+
+            text = "**VIP Trial Joiners - Days Remaining**\n\n"
+            for row in trials:
+                days_left = (row['expiry_date'] - current_time).days
+                if days_left <= 0:
+                    continue
+                status = f"{days_left} day(s) of trial left"
+                text += f"User {row['user_id']}: {status}\n"
+
+            await callback_query.message.edit_text(text)
+            await callback_query.answer()
+        except Exception as e:
+            await callback_query.message.edit_text(f"❌ Error: {str(e)}")
+            await callback_query.answer()
 
     async def execute_send_welcome_dm(self, callback_query: CallbackQuery, menu_id: str, context: dict, user_message: Message = None):
         """Execute the actual welcome DM send"""
@@ -4019,6 +4149,24 @@ class TelegramTradingBot:
                     )
                 ''')
 
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS vip_trial_activations (
+                        user_id BIGINT PRIMARY KEY,
+                        activation_date TIMESTAMP WITH TIME ZONE NOT NULL,
+                        expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                ''')
+
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS trial_offer_history (
+                        user_id BIGINT PRIMARY KEY,
+                        offer_sent_date TIMESTAMP WITH TIME ZONE NOT NULL,
+                        accepted BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                ''')
+
             logger.info("Database tables initialized")
 
             await self.load_config_from_db()
@@ -5257,6 +5405,7 @@ class TelegramTradingBot:
                     BotCommand("tradeoverride", "Override trade status (menu)"),
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
+                    BotCommand("newmemberslist", "Track new members and trial status"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM statistics"),
                 ]
@@ -5350,6 +5499,85 @@ class TelegramTradingBot:
         except Exception as e:
             await self.log_to_debug(f"Could not send engagement discount DM to {user_id}: {e}", is_error=True)
 
+    async def daily_vip_trial_offer_loop(self):
+        """Daily check at 09:00 Amsterdam time to offer VIP trial to free-only members.
+        
+        Logic:
+        - Excludes ALL users who ever activated a trial (even if expired 3 weeks ago)
+        - Alternating pattern: Send offer → Skip 1 day → Send offer → Skip 1 day... (24hr cooldown)
+        - Continues looping until user joins VIP trial
+        """
+        await asyncio.sleep(60)
+        
+        while self.running:
+            try:
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                
+                if current_time.hour == 9 and current_time.minute < 2:
+                    if not self.db_pool:
+                        await asyncio.sleep(60)
+                        continue
+
+                    try:
+                        async with self.db_pool.acquire() as conn:
+                            free_members = await conn.fetch(
+                                '''SELECT DISTINCT fgj.user_id FROM free_group_joins fgj
+                                   LEFT JOIN trial_offer_history toh ON fgj.user_id = toh.user_id
+                                   LEFT JOIN vip_trial_activations vta ON fgj.user_id = vta.user_id
+                                   WHERE vta.user_id IS NULL AND 
+                                   (toh.user_id IS NULL OR toh.offer_sent_date < NOW() - INTERVAL '24 hours')
+                                   -- vta.user_id IS NULL: Excludes anyone with trial record (active or expired)
+                                   -- toh.user_id IS NULL: Never offered before (send on day 1)
+                                   -- offer_sent_date < 24 hours ago: Send again on day 3, 5, 7... (skip odd days)
+                                '''
+                            )
+
+                        for member_row in free_members:
+                            user_id = member_row['user_id']
+                            
+                            try:
+                                chat_member = await self.app.get_chat_member(VIP_GROUP_ID, user_id)
+                                is_in_vip = chat_member.status in [
+                                    ChatMemberStatus.MEMBER,
+                                    ChatMemberStatus.ADMINISTRATOR,
+                                    ChatMemberStatus.OWNER
+                                ]
+                            except Exception:
+                                is_in_vip = False
+
+                            if not is_in_vip:
+                                offer_message = (
+                                    f"Want to try our VIP Group for FREE?\n\n"
+                                    f"We're offering a 3-day free trial of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\n"
+                                    f"Your free trial will automatically be activated once you join our VIP group through this link: {VIP_TRIAL_INVITE_LINK}"
+                                )
+                                
+                                try:
+                                    await self.app.send_message(user_id, offer_message)
+                                    
+                                    async with self.db_pool.acquire() as conn:
+                                        await conn.execute(
+                                            '''INSERT INTO trial_offer_history (user_id, offer_sent_date)
+                                               VALUES ($1, $2)
+                                               ON CONFLICT (user_id) DO UPDATE SET offer_sent_date = $2''',
+                                            user_id, current_time
+                                        )
+                                    
+                                    logger.info(f"Sent VIP trial offer to user {user_id}")
+                                except Exception as e:
+                                    logger.error(f"Could not send trial offer to {user_id}: {e}")
+
+                    except Exception as e:
+                        logger.error(f"Error in daily VIP trial offer check: {e}")
+                    
+                    await asyncio.sleep(120)
+                else:
+                    await asyncio.sleep(60)
+                    
+            except Exception as e:
+                logger.error(f"Error in daily_vip_trial_offer_loop: {e}")
+                await asyncio.sleep(60)
+
     async def heartbeat_loop(self):
         while self.running:
             try:
@@ -5416,6 +5644,7 @@ class TelegramTradingBot:
         asyncio.create_task(self.monday_activation_loop())
         asyncio.create_task(self.engagement_tracking_loop())
         asyncio.create_task(self.retry_failed_welcome_dms_loop())
+        asyncio.create_task(self.daily_vip_trial_offer_loop())
 
         try:
             while self.running:
