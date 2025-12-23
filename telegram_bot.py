@@ -1504,36 +1504,8 @@ class TelegramTradingBot:
                 price_line = "**Current: N/A**"
                 position_text = "_Unable to get price_"
 
-            tp1_mark = "✅" if 'TP1' in [t.upper() for t in tp_hits] else "⭕"
-            tp2_mark = "✅" if 'TP2' in [t.upper() for t in tp_hits] else "⭕"
-            tp3_mark = "✅" if 'TP3' in [t.upper() for t in tp_hits] else "⭕"
-            sl_mark = "🔴" if 'sl' in status.lower() else "⭕"
 
-            levels_display = (f"{sl_mark} SL: {sl:.5f}\n"
-                              f"⭕ Entry: {entry:.5f}\n"
-                              f"{tp1_mark} TP1: {tp1:.5f}\n"
-                              f"{tp2_mark} TP2: {tp2:.5f}\n"
-                              f"{tp3_mark} TP3: {tp3:.5f}")
-
-            status_indicators = []
-            if breakeven:
-                status_indicators.append("🔄 Breakeven Active")
-            if 'active' in status.lower():
-                status_indicators.append("🟢 Active")
-            elif 'closed' in status.lower():
-                status_indicators.append("⚪ Closed")
-            if manual_overrides:
-                status_indicators.append(
-                    f"✋ Overrides: {', '.join(manual_overrides)}")
-
-            response += f"**{pair}** - {action}\n"
-            response += f"{price_line}\n{position_text}\n\n"
-            response += f"{levels_display}\n"
-            response += f"API: {assigned_api}\n"
-            if status_indicators:
-                response += f"{' | '.join(status_indicators)}\n"
-            response += f"ID: {msg_id[:8]}...\n"
-            response += "─────────────\n\n"
+            response += f"**{pair}** - {action} | {price_line} | {position_text}\n"
 
         if len(trades) > 10:
             response += f"_...and {len(trades) - 10} more trades_"
@@ -5393,19 +5365,13 @@ class TelegramTradingBot:
 
     async def register_bot_commands(self):
         try:
-            public_commands = [
-                BotCommand("activetrades", "View active trading signals"),
-                BotCommand("pricetest", "Test live price for a pair"),
-            ]
-            await self.app.set_bot_commands(public_commands)
-            logger.info(f"✅ Public bot commands registered ({len(public_commands)} commands)")
-
+            # All commands are owner-only
             if BOT_OWNER_USER_ID:
                 owner_commands = [
-                    BotCommand("activetrades", "View active trading signals"),
-                    BotCommand("pricetest", "Test live price for a pair"),
                     BotCommand("entry", "Create trading signal (menu)"),
+                    BotCommand("activetrades", "View active trading signals"),
                     BotCommand("tradeoverride", "Override trade status (menu)"),
+                    BotCommand("pricetest", "Test live price for a pair"),
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
@@ -5417,17 +5383,11 @@ class TelegramTradingBot:
                         owner_commands,
                         scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
                     logger.info(
-                        f"✅ Owner commands registered for user {BOT_OWNER_USER_ID} ({len(owner_commands)} commands)")
+                        f"✅ All bot commands registered as owner-only for user {BOT_OWNER_USER_ID} ({len(owner_commands)} commands)")
                 except Exception as scope_error:
                     logger.error(f"❌ Error setting owner-scoped commands: {scope_error}")
-                    # Fallback: try setting without scope
-                    try:
-                        await self.app.set_bot_commands(owner_commands)
-                        logger.info(f"✅ Owner commands registered globally ({len(owner_commands)} commands)")
-                    except Exception as fallback_error:
-                        logger.error(f"❌ Error setting global owner commands: {fallback_error}")
             else:
-                logger.warning("⚠️  BOT_OWNER_USER_ID not set, skipping owner-specific commands")
+                logger.warning("⚠️  BOT_OWNER_USER_ID not set, cannot register owner-specific commands")
         except Exception as e:
             logger.error(f"❌ Error registering bot commands: {e}")
 
