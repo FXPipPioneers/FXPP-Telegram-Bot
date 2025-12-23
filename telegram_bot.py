@@ -2190,7 +2190,7 @@ class TelegramTradingBot:
             await self._show_vip_trial_joiners(callback_query)
 
     async def _show_free_group_joiners(self, callback_query: CallbackQuery):
-        """Show free group joiners grouped by week"""
+        """Show free group joiners grouped by week with daily and weekly totals"""
         if not self.db_pool:
             await callback_query.message.edit_text("❌ Database not available")
             await callback_query.answer()
@@ -2225,10 +2225,16 @@ class TelegramTradingBot:
                     joiners_by_date[date_key] = []
                 joiners_by_date[date_key].append(f"User {row['user_id']}")
 
-            text = f"**Free Group Joiners - This Week**\n\nMonday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n\n"
+            # Calculate weekly total
+            total_weekly = len(joins)
+            
+            text = f"**Free Group Joiners - This Week**\n\nMonday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n"
+            text += f"**📊 Total This Week: {total_weekly} members**\n\n"
+            
             for date in sorted(joiners_by_date.keys(), reverse=True):
                 users = ", ".join(joiners_by_date[date])
-                text += f"**{date}:** {users}\n"
+                daily_count = len(joiners_by_date[date])
+                text += f"**{date}** ({daily_count}): {users}\n"
 
             await callback_query.message.edit_text(text)
             await callback_query.answer()
@@ -2237,37 +2243,35 @@ class TelegramTradingBot:
             await callback_query.answer()
 
     async def _show_vip_trial_joiners(self, callback_query: CallbackQuery):
-        """Show VIP trial joiners with days remaining"""
-        if not self.db_pool:
-            await callback_query.message.edit_text("❌ Database not available")
-            await callback_query.answer()
-            return
-
+        """Show VIP trial joiners with time remaining"""
         try:
-            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-
-            async with self.db_pool.acquire() as conn:
-                trials = await conn.fetch(
-                    '''SELECT user_id, activation_date, expiry_date FROM vip_trial_activations
-                       WHERE expiry_date > $1
-                       ORDER BY expiry_date ASC''',
-                    current_time
-                )
-
-            if not trials:
+            if not AUTO_ROLE_CONFIG['active_members']:
                 await callback_query.message.edit_text("**VIP Trial Joiners**\n\nNo active VIP trials.")
                 await callback_query.answer()
                 return
 
-            text = "**VIP Trial Joiners - Days Remaining**\n\n"
-            for row in trials:
-                days_left = (row['expiry_date'] - current_time).days
-                if days_left <= 0:
-                    continue
-                status = f"{days_left} day(s) of trial left"
-                text += f"User {row['user_id']}: {status}\n"
+            response = "**Active VIP Trial Members**\n\n"
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
-            await callback_query.message.edit_text(text)
+            for member_id, data_item in sorted(
+                    AUTO_ROLE_CONFIG['active_members'].items(),
+                    key=lambda x: datetime.fromisoformat(x[1].get('expiry_time', current_time.isoformat())).timestamp() if x[1].get('expiry_time') else 0
+            ):
+                expiry = datetime.fromisoformat(
+                    data_item.get('expiry_time', current_time.isoformat()))
+                if expiry.tzinfo is None:
+                    expiry = AMSTERDAM_TZ.localize(expiry)
+
+                time_left = expiry - current_time
+                total_seconds = max(0, time_left.total_seconds())
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+
+                weekend = " (weekend)" if data_item.get(
+                    'weekend_delayed') else ""
+                response += f"User {member_id}: {hours}h {minutes}m left{weekend}\n"
+
+            await callback_query.message.edit_text(response)
             await callback_query.answer()
         except Exception as e:
             await callback_query.message.edit_text(f"❌ Error: {str(e)}")
