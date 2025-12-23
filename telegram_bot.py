@@ -3065,24 +3065,11 @@ class TelegramTradingBot:
         }
 
         await self.save_auto_role_config()
-
-        welcome_msg = (
-            f"**Welcome to FX Pip Pioneers!** As a welcome gift, we've given you "
-            f"**access to the VIP Group for 3 trading days.** "
-            f"Your access will expire on {expiry_time.strftime('%A at %H:%M')}. "
-            f"Good luck trading!")
-
-        try:
-            await self.app.get_users([user.id])
-            await asyncio.sleep(1)
-            await self.app.send_message(user.id, welcome_msg)
-            await self.log_to_debug(
-                f"Sent trial welcome DM to {user.first_name} (expiring {expiry_time.strftime('%A at %H:%M')})")
-        except Exception as e:
-            error_msg = f"Could not send trial welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
-            logger.error(error_msg)
-            await self.log_to_debug(error_msg, is_error=True)
-            await self.track_failed_welcome_dm(user.id, user.first_name, "vip_trial", welcome_msg)
+        
+        # NOTE: Welcome DM is sent to users when they join the FREE group, not here.
+        # Users who join the VIP group have already activated their trial by clicking the invite link.
+        await self.log_to_debug(
+            f"Trial activated for {user.first_name} (expires {expiry_time.strftime('%A at %H:%M')})")
 
     async def get_working_api_for_pair(self, pair: str) -> str:
         pair_clean = pair.upper().replace("/",
@@ -3124,6 +3111,42 @@ class TelegramTradingBot:
                 logger.error(f"Error getting price from {api_name}: {e}")
                 continue
 
+        return None
+
+    async def get_live_price_with_fallback(self, pair: str, assigned_api: Optional[str] = None) -> Optional[float]:
+        """Get live price - try assigned API first, then fallback to all APIs if assigned fails"""
+        pair_clean = pair.upper().replace("/",
+                                          "").replace("-",
+                                                      "").replace("_", "")
+
+        # If assigned API specified, try it first
+        if assigned_api:
+            try:
+                price = await self.get_price_from_api(assigned_api, pair_clean)
+                if price:
+                    logger.debug(f"Price fetched from assigned API {assigned_api}: {price}")
+                    return price
+                else:
+                    logger.debug(f"Assigned API {assigned_api} returned no price for {pair_clean}, trying fallback APIs")
+            except Exception as e:
+                logger.warning(f"Assigned API {assigned_api} failed for {pair_clean}: {str(e)[:100]}, trying fallback APIs")
+
+        # Fallback: try all APIs in priority order
+        for api_name in PRICE_TRACKING_CONFIG['api_priority_order']:
+            # Skip the assigned API since we already tried it
+            if assigned_api and api_name == assigned_api:
+                continue
+
+            try:
+                price = await self.get_price_from_api(api_name, pair_clean)
+                if price:
+                    logger.info(f"Price fetched from fallback API {api_name}: {price}")
+                    return price
+            except Exception as e:
+                logger.error(f"Error getting price from fallback API {api_name}: {e}")
+                continue
+
+        logger.warning(f"All APIs failed for {pair_clean} - unable to get price")
         return None
 
     async def get_price_from_api(self, api_name: str,
@@ -3226,29 +3249,111 @@ class TelegramTradingBot:
         return None
 
     async def check_message_still_exists(self, message_id: str, trade_data: dict) -> bool:
-        """Check if the original trading signal message still exists in Telegram"""
+        """Check if the original trading signal message still exists in Telegram
+        
+        SECURITY: Only deletes trades if message explicitly verified as deleted.
+        Assumes message exists on any error to prevent accidental deletion of active trades.
+        """
         try:
+            # Validate input
             chat_id = trade_data.get('group_id')
             if not chat_id:
-                return False
+                logger.warning(f"check_message_still_exists: No group_id in trade_data for message {message_id}")
+                return True  # Assume exists if we can't verify
             
-            # Try to fetch the message from the group
-            message = await self.app.get_messages(int(chat_id), int(message_id))
-            return message is not None
+            # Extract the actual message number from composite ID (format: "group_id_message_id")
+            actual_msg_id_str = str(message_id)
+            if '_' in actual_msg_id_str:
+                actual_msg_id_str = actual_msg_id_str.split('_', 1)[1]
+            
+            # Validate that we have a numeric message ID
+            try:
+                actual_msg_id = int(actual_msg_id_str)
+            except ValueError:
+                logger.error(f"check_message_still_exists: Invalid message ID format '{message_id}' - cannot parse to integer. Assuming message exists.")
+                return True  # Safer to assume exists than to delete on parse error
+            
+            # Validate chat_id is numeric
+            try:
+                chat_id_int = int(chat_id)
+            except (ValueError, TypeError):
+                logger.error(f"check_message_still_exists: Invalid chat_id '{chat_id}' - cannot parse to integer. Assuming message exists.")
+                return True  # Safer to assume exists
+            
+            # Try to fetch the message from the group with timeout
+            try:
+                message = await asyncio.wait_for(
+                    self.app.get_messages(chat_id_int, actual_msg_id),
+                    timeout=10
+                )
+                return message is not None
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout checking if message {message_id} exists in chat {chat_id}. Assuming it still exists.")
+                return True  # Timeout = assume exists, don't delete
+                
         except Exception as e:
             # Only treat as deleted if it's a specific "not found" error
             error_str = str(e).lower()
-            if "not found" in error_str or "message_id_invalid" in error_str:
+            if "not found" in error_str or "message_id_invalid" in error_str or "message deleted" in error_str:
+                logger.info(f"Message {message_id} verified as deleted from Telegram: {e}")
                 return False
+            
             # For any other error (network, permissions, etc), assume message still exists
             # This prevents false deletions due to transient issues
-            logger.debug(f"Error checking message {message_id}: {e}, assuming it still exists")
+            logger.warning(f"Unexpected error checking message {message_id}: {type(e).__name__}: {e}. Assuming message still exists to prevent accidental deletion.")
             return True
 
     async def check_single_trade_immediately(self, message_id: str,
                                              trade_data: dict):
         await asyncio.sleep(5)
         await self.check_price_levels(message_id, trade_data)
+
+    async def verify_trade_data_consistency(self, message_id: str, trade_data: dict) -> dict:
+        """Verify trade data consistency between memory and database - prevents missed hits"""
+        try:
+            if not self.db_pool:
+                return trade_data
+                
+            # Fetch latest data from database
+            async with self.db_pool.acquire() as conn:
+                db_trade = await conn.fetchrow(
+                    'SELECT * FROM active_trades WHERE message_id = $1',
+                    message_id)
+                
+                if not db_trade:
+                    logger.warning(f"Trade {message_id} not found in database - may have been deleted")
+                    return trade_data
+                
+                # Sync critical fields from database (these are source of truth)
+                synced_data = dict(trade_data)
+                synced_data['status'] = db_trade.get('status', trade_data.get('status', 'active'))
+                
+                # Parse TP hits from database
+                tp_hits_str = db_trade.get('tp_hits', '')
+                synced_data['tp_hits'] = [h.strip() for h in tp_hits_str.split(',') if h.strip()]
+                
+                synced_data['breakeven_active'] = db_trade.get('breakeven_active', False)
+                synced_data['manual_overrides'] = db_trade.get('manual_overrides', '')
+                
+                # Check if memory data differs from database
+                if synced_data.get('tp_hits') != trade_data.get('tp_hits', []):
+                    logger.info(f"Trade {message_id}: TP hits synced from DB. Memory: {trade_data.get('tp_hits')}, DB: {synced_data.get('tp_hits')}")
+                    # Update memory with database values
+                    trade_data['tp_hits'] = synced_data['tp_hits']
+                
+                if synced_data.get('breakeven_active') != trade_data.get('breakeven_active'):
+                    logger.info(f"Trade {message_id}: Breakeven status synced from DB")
+                    trade_data['breakeven_active'] = synced_data['breakeven_active']
+                    
+                if synced_data.get('status') != trade_data.get('status'):
+                    logger.info(f"Trade {message_id}: Status synced from DB. Memory: {trade_data.get('status')}, DB: {synced_data.get('status')}")
+                    trade_data['status'] = synced_data['status']
+                
+                return trade_data
+                
+        except Exception as e:
+            logger.error(f"Error verifying trade data consistency for {message_id}: {e}")
+            return trade_data
 
     async def check_price_levels(self, message_id: str, trade_data: dict):
         # First check if the original message still exists (cleanup deleted signals)
@@ -3257,6 +3362,9 @@ class TelegramTradingBot:
             if message_id in PRICE_TRACKING_CONFIG['active_trades']:
                 del PRICE_TRACKING_CONFIG['active_trades'][message_id]
             return
+        
+        # Verify trade data consistency between memory and database
+        trade_data = await self.verify_trade_data_consistency(message_id, trade_data)
         
         pair = trade_data.get('pair')
         action = trade_data.get('action')
@@ -3268,7 +3376,8 @@ class TelegramTradingBot:
         breakeven_active = trade_data.get('breakeven_active', False)
         live_entry = trade_data.get('live_entry') or trade_data.get('entry')
 
-        current_price = await self.get_live_price(pair)
+        # Try assigned API first, then fallback to all APIs if it fails
+        current_price = await self.get_live_price_with_fallback(pair, trade_data.get('assigned_api'))
         if not current_price:
             return
 
@@ -3403,8 +3512,113 @@ class TelegramTradingBot:
         await self.remove_trade_from_db(message_id, 'breakeven_hit')
 
         await self.log_to_debug(
-            f"{trade['pair']} {trade['action']} hit breakeven @ {entry_price:.5f}"
+            f"{trade['pair']} {trade['action']} hit breakeven @ {trade['entry_price']:.5f}"
         )
+
+    def validate_chronological_hits(self, hits: list) -> list:
+        """Validate hits chronologically according to trading rules (Feature 3: Chronological Hit Validation)"""
+        valid_hits = []
+        sl_hit = False
+        tp_levels_hit = set()
+
+        for hit in sorted(hits, key=lambda x: x.get('hit_time', 0)):
+            hit_type = hit.get('hit_type')
+            hit_level = hit.get('hit_level')
+
+            # Rule 1: If SL was hit first, ignore all subsequent TP hits
+            if sl_hit and hit_type == 'tp':
+                continue
+
+            # Rule 2: If SL hits after TP2, ignore it (breakeven protection)
+            if hit_type == 'sl' and 'TP2' in tp_levels_hit:
+                continue
+
+            # Rule 3: Cannot hit both TP3 and SL
+            if hit_type == 'sl' and 'TP3' in tp_levels_hit:
+                continue
+            if hit_type == 'tp' and hit_level == 'TP3' and sl_hit:
+                continue
+
+            # Hit is valid according to trading rules
+            valid_hits.append(hit)
+
+            # Update state tracking
+            if hit_type == 'sl':
+                sl_hit = True
+            elif hit_type == 'tp':
+                tp_levels_hit.add(hit_level)
+
+        return valid_hits
+
+    async def recover_missed_signals(self):
+        """Check for trading signals sent while bot was offline (Feature 6: Missed Signal Recovery)"""
+        if not PRICE_TRACKING_CONFIG["enabled"]:
+            return
+
+        try:
+            await self.log_to_debug("🔍 Scanning for missed trading signals while offline...")
+
+            # Get the last known online time
+            offline_check_time = self.last_online_time
+            if not offline_check_time:
+                # If we don't know when we were last online, check last 12 hours
+                offline_check_time = datetime.now(AMSTERDAM_TZ) - timedelta(hours=12)
+
+            recovered_signals = 0
+
+            # Check both VIP and Free groups for missed signals
+            for group_id in [VIP_GROUP_ID, FREE_GROUP_ID]:
+                if not group_id:
+                    continue
+
+                try:
+                    # Scan recent messages from the group
+                    messages = await self.app.get_chat_history(group_id, limit=100)
+                    if messages is None:
+                        continue
+                    async for message in messages:
+                        if not message or not message.text:
+                            continue
+
+                        # Only process signals from owner
+                        if message.from_user and message.from_user.id != BOT_OWNER_USER_ID:
+                            continue
+
+                        # Check if message contains trading signal
+                        if "Trade Signal For:" not in message.text:
+                            continue
+
+                        # Skip if already being tracked
+                        trade_key = f"{group_id}_{message.id}"
+                        if trade_key in PRICE_TRACKING_CONFIG['active_trades']:
+                            continue
+
+                        # Parse the signal
+                        trade_data = self.parse_signal_message(message.text)
+                        if not trade_data:
+                            continue
+
+                        # Save to database and start tracking
+                        trade_data['group_id'] = group_id
+                        trade_data['message_id'] = str(message.id)
+                        trade_data['chat_id'] = group_id
+                        trade_data['created_at'] = datetime.now(AMSTERDAM_TZ)
+
+                        PRICE_TRACKING_CONFIG['active_trades'][trade_key] = trade_data
+                        await self.save_trade_to_db(trade_key, trade_data)
+
+                        await self.log_to_debug(f"✅ Recovered: {trade_data.get('pair')} {trade_data.get('action')}")
+                        recovered_signals += 1
+
+                except Exception as e:
+                    logger.error(f"Error scanning group {group_id} for missed signals: {e}")
+                    continue
+
+            if recovered_signals > 0:
+                await self.log_to_debug(f"📊 Successfully recovered {recovered_signals} missed trading signals!")
+
+        except Exception as e:
+            logger.error(f"Error during missed signal recovery: {e}")
 
     async def send_tp_notification(self, message_id: str, trade_data: dict,
                                    tp_level: str, hit_price: float):
@@ -4921,10 +5135,14 @@ class TelegramTradingBot:
                             
                             # Success - remove from pending
                             await conn.execute('DELETE FROM pending_welcome_dms WHERE user_id = $1', user_id)
-                            await self.log_to_debug(f"Successfully sent welcome DM to {first_name} (ID: {user_id}) on retry attempt {failed_attempts}")
+                            success_msg = f"✅ Successfully sent welcome DM to {first_name} (ID: {user_id}) on retry attempt {failed_attempts}"
+                            logger.info(success_msg)
+                            await self.log_to_debug(success_msg)
                             
                         except Exception as e:
-                            logger.warning(f"Retry attempt {failed_attempts} failed for {first_name}: {e}")
+                            error_msg = f"⚠️ Retry attempt {failed_attempts} failed for {first_name} (ID: {user_id}): {e}"
+                            logger.warning(error_msg)
+                            await self.log_to_debug(error_msg, is_error=True)
                             # Update attempt counter
                             await conn.execute(
                                 'UPDATE pending_welcome_dms SET failed_attempts = $1, last_attempt = NOW() WHERE user_id = $2',
@@ -5176,6 +5394,7 @@ class TelegramTradingBot:
                 logger.error(f"Could not send recovery message: {e}")
 
         await self.check_offline_tp_sl_hits()
+        await self.recover_missed_signals()
         await self.check_offline_joiners()
         await self.check_offline_preexpiration_warnings()
         await self.check_offline_followup_dms()
