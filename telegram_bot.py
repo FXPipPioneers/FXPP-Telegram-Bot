@@ -3710,10 +3710,7 @@ class TelegramTradingBot:
 
                 try:
                     # Scan recent messages from the group
-                    messages = await self.app.get_chat_history(group_id, limit=100)
-                    if messages is None:
-                        continue
-                    async for message in messages:
+                    async for message in self.app.get_chat_history(group_id, limit=100):
                         if not message or not message.text:
                             continue
 
