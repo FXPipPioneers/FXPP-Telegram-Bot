@@ -5630,7 +5630,8 @@ class TelegramTradingBot:
                 logger.error(f"Could not send recovery message: {e}")
 
         await self.check_offline_tp_sl_hits()
-        await self.recover_missed_signals()
+        # Note: recover_missed_signals() uses get_chat_history() which is not available to bots in Telegram API
+        # Bots cannot retrieve message history from groups/channels - this is a fundamental API limitation
         await self.check_offline_joiners()
         await self.check_offline_preexpiration_warnings()
         await self.check_offline_followup_dms()
