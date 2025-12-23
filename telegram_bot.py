@@ -527,13 +527,14 @@ class TelegramTradingBot:
             await self.log_to_debug(
                 f"Parsed manual signal: {pair} {action} @ {entry_price}")
 
-            if pair in EXCLUDED_FROM_TRACKING:
+            # For excluded pairs, we track them manually but don't auto-check prices
+            manual_tracking_only = pair in EXCLUDED_FROM_TRACKING
+            if manual_tracking_only:
                 await self.log_to_debug(
-                    f"Skipping tracking for {pair} (excluded from auto-tracking)"
+                    f"Adding {pair} to manual tracking only (no automatic price monitoring)"
                 )
-                return
-
-            assigned_api = await self.get_working_api_for_pair(pair)
+            
+            assigned_api = await self.get_working_api_for_pair(pair) if not manual_tracking_only else 'manual'
 
             live_price = await self.get_live_price(pair)
             if live_price:
@@ -615,6 +616,8 @@ class TelegramTradingBot:
                 'manual_overrides': [],
                 'breakeven_active':
                 False,
+                'manual_tracking_only':
+                manual_tracking_only,
                 'created_at':
                 datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ).isoformat(),
                 'group_name':
@@ -3356,6 +3359,10 @@ class TelegramTradingBot:
             return trade_data
 
     async def check_price_levels(self, message_id: str, trade_data: dict):
+        # Skip price monitoring for manually-tracked pairs (e.g., XAUUSD, BTCUSD, GER40, US100)
+        if trade_data.get('manual_tracking_only', False):
+            return
+        
         # First check if the original message still exists (cleanup deleted signals)
         if not await self.check_message_still_exists(message_id, trade_data):
             await self.remove_trade_from_db(message_id, "message_deleted")
