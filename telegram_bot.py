@@ -1313,12 +1313,7 @@ class TelegramTradingBot:
         user_id = message.from_user.id
 
         if not await self.is_owner(user_id):
-            if self.startup_complete:
-                owner_mention = "@fx_pippioneers"
-                await message.reply(
-                    f"❌ **This bot cannot respond to direct messages from members.**\n\n"
-                    f"If you need support or have any questions, please contact {owner_mention}."
-                )
+            # Silently ignore messages from non-owners
             return
 
         # Handle retracttrial custom input
@@ -3303,9 +3298,9 @@ class TelegramTradingBot:
             logger.info(f"✅ Sent welcome DM to {user.first_name} (ID: {user.id}) about VIP trial")
             await self.log_to_debug(f"✅ Sent welcome DM to {user.first_name} (ID: {user.id}) about VIP trial", user_id=user.id)
         except Exception as e:
-            error_msg = f"❌ Could not send welcome DM to {user.first_name} (ID: {user.id}), will retry in 2 minutes: {e}"
+            error_msg = f"❌ Could not send welcome DM to {user.first_name} (ID: {user.id}): {e}"
             logger.error(error_msg)
-            await self.log_to_debug(error_msg, is_error=True, user_id=user.id, failed_message=welcome_dm)
+            await self.log_to_debug(f"{error_msg} [Will retry in 2 minutes]", is_error=True, user_id=user.id, failed_message=welcome_dm)
             # Track for retry
             await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
 
