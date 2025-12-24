@@ -475,6 +475,10 @@ class TelegramTradingBot:
         async def dmmessages_callback(client, callback_query: CallbackQuery):
             await self._handle_dmmessages_callback(client, callback_query)
 
+        @self.app.on_callback_query(filters.regex("^pid_"))
+        async def peerid_callback(client, callback_query: CallbackQuery):
+            await self.handle_peerid_callback(client, callback_query)
+
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
@@ -815,15 +819,11 @@ class TelegramTradingBot:
                 if user_id:
                     msg_text += f"\n\n👤 **User ID:** `{user_id}`"
                     
-                    # Build the button URL to open DM with pre-filled message
-                    button_url = f"tg://msg?to={user_id}"
-                    if failed_message:
-                        # URL-encode the message and add it to the deep link
-                        encoded_message = quote(failed_message, safe='')
-                        button_url += f"&text={encoded_message}"
+                    # Build the button URL to open user's profile
+                    button_url = f"tg://user?id={user_id}"
                     
                     keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💬 Open DM with User", url=button_url)]
+                        [InlineKeyboardButton("👤 View User Profile", url=button_url)]
                     ])
                 
                 await self.app.send_message(DEBUG_GROUP_ID, msg_text, reply_markup=keyboard)
@@ -1417,6 +1417,19 @@ class TelegramTradingBot:
                 await self.execute_send_welcome_dm(None, menu_id, context, user_message=message)
             except ValueError:
                 await message.reply("Invalid user ID. Please provide a numeric ID only.")
+            return
+
+        # Handle peer ID status input
+        if not hasattr(self, '_waiting_for_peer_id'):
+            self._waiting_for_peer_id = {}
+        
+        if user_id in self._waiting_for_peer_id:
+            self._waiting_for_peer_id.pop(user_id)
+            try:
+                peer_user_id = int(message.text.strip())
+                await self._show_peer_id_status(message, peer_user_id)
+            except ValueError:
+                await message.reply("❌ Invalid user ID. Please provide a numeric ID only.")
             return
 
         # Handle cleartrial custom member ID input
@@ -2329,67 +2342,46 @@ class TelegramTradingBot:
             await callback_query.answer()
 
     async def _show_vip_trial_joiners(self, callback_query: CallbackQuery):
-        """Show VIP trial joiners grouped by activation date with daily and weekly totals"""
-        if not self.db_pool:
-            await callback_query.message.edit_text("❌ Database not available")
-            await callback_query.answer()
-            return
-
+        """Show all active VIP trial members with time remaining"""
         try:
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-            monday = current_time - timedelta(days=current_time.weekday())
-            sunday = monday + timedelta(days=6)
-
-            async with self.db_pool.acquire() as conn:
-                trials = await conn.fetch(
-                    '''SELECT user_id, activation_date FROM vip_trial_activations 
-                       WHERE activation_date >= $1 AND activation_date <= $2
-                       ORDER BY activation_date DESC''',
-                    monday.date(), sunday.date()
-                )
-
-            if not trials:
+            
+            if not AUTO_ROLE_CONFIG['active_members']:
                 await callback_query.message.edit_text(
-                    f"**VIP Trial Joiners - This Week**\n\n"
-                    f"Monday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n\n"
-                    f"No new trial activations this week."
+                    "**Active VIP Trial Members**\n\n"
+                    "No active trial members at this time."
                 )
                 await callback_query.answer()
                 return
 
-            trials_by_date = {}
-            for row in trials:
-                date_key = row['activation_date'].strftime('%d-%m-%Y')
-                if date_key not in trials_by_date:
-                    trials_by_date[date_key] = []
+            # Get all active trial members
+            trials_with_time = []
+            for user_id_str, member_data in AUTO_ROLE_CONFIG['active_members'].items():
+                expiry = datetime.fromisoformat(
+                    member_data.get('expiry_time', current_time.isoformat()))
+                if expiry.tzinfo is None:
+                    expiry = AMSTERDAM_TZ.localize(expiry)
                 
-                # Get time remaining for this user
-                if row['user_id'] in AUTO_ROLE_CONFIG['active_members']:
-                    data_item = AUTO_ROLE_CONFIG['active_members'][row['user_id']]
-                    expiry = datetime.fromisoformat(
-                        data_item.get('expiry_time', current_time.isoformat()))
-                    if expiry.tzinfo is None:
-                        expiry = AMSTERDAM_TZ.localize(expiry)
-                    
-                    time_left = expiry - current_time
-                    total_seconds = max(0, time_left.total_seconds())
-                    hours = int(total_seconds // 3600)
-                    minutes = int((total_seconds % 3600) // 60)
-                    
-                    trials_by_date[date_key].append(f"User {row['user_id']} ({hours}h {minutes}m left)")
-                else:
-                    trials_by_date[date_key].append(f"User {row['user_id']} (expired)")
-
-            # Calculate weekly total
-            total_weekly = len(trials)
+                time_left = expiry - current_time
+                total_seconds = max(0, time_left.total_seconds())
+                
+                trials_with_time.append({
+                    'user_id': user_id_str,
+                    'total_seconds': total_seconds,
+                    'expiry': expiry
+                })
             
-            text = f"**VIP Trial Joiners - This Week**\n\nMonday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n"
-            text += f"**📊 Total This Week: {total_weekly} members**\n\n"
+            # Sort by time remaining (ascending - least time first)
+            trials_with_time.sort(key=lambda x: x['total_seconds'])
             
-            for date in sorted(trials_by_date.keys(), reverse=True):
-                users = ", ".join(trials_by_date[date])
-                daily_count = len(trials_by_date[date])
-                text += f"**{date}** ({daily_count}): {users}\n"
+            text = "**Active VIP Trial Members**\n\n"
+            text += f"**Total: {len(trials_with_time)} members**\n\n"
+            
+            for item in trials_with_time:
+                hours = int(item['total_seconds'] // 3600)
+                minutes = int((item['total_seconds'] % 3600) // 60)
+                status = "⏳" if item['total_seconds'] > 0 else "❌"
+                text += f"{status} User {item['user_id']}: {hours}h {minutes}m left\n"
 
             await callback_query.message.edit_text(text)
             await callback_query.answer()
@@ -2398,21 +2390,36 @@ class TelegramTradingBot:
             await callback_query.answer()
 
     async def handle_peer_id_status(self, client: Client, message: Message):
-        """Check if a user's peer ID has been established"""
+        """Check if a user's peer ID has been established - widget style"""
         if not await self.is_owner(message.from_user.id):
             return
         
         args = message.text.split()
-        if len(args) < 2:
-            await message.reply("Usage: `/peeridstatus <user_id>`")
+        
+        # If user ID provided as argument, show status directly
+        if len(args) >= 2:
+            try:
+                user_id = int(args[1])
+                await self._show_peer_id_status(message, user_id)
+            except ValueError:
+                await message.reply("❌ Invalid user ID. Please provide a valid number.")
             return
         
-        try:
-            user_id = int(args[1])
-        except ValueError:
-            await message.reply("❌ Invalid user ID. Please provide a valid number.")
-            return
+        # Otherwise show widget for user to input ID
+        text = "**🔍 Peer ID Status Checker**\n\nSend me a user ID to check their peer establishment status."
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel", callback_data="pid_cancel")]
+        ])
         
+        await message.reply(text, reply_markup=keyboard)
+        
+        # Set up context for text input
+        if not hasattr(self, '_waiting_for_peer_id'):
+            self._waiting_for_peer_id = {}
+        self._waiting_for_peer_id[message.from_user.id] = True
+    
+    async def _show_peer_id_status(self, message: Message, user_id: int):
+        """Display peer ID status for a user"""
         if not self.db_pool:
             await message.reply("❌ Database not available")
             return
@@ -2458,6 +2465,22 @@ class TelegramTradingBot:
             
         except Exception as e:
             await message.reply(f"❌ Error checking peer ID status: {str(e)}")
+
+    async def handle_peerid_callback(self, client: Client, callback_query: CallbackQuery):
+        """Handle peer ID callback (cancel button)"""
+        if not await self.is_owner(callback_query.from_user.id):
+            await callback_query.answer("Restricted to bot owner.", show_alert=True)
+            return
+        
+        if callback_query.data == "pid_cancel":
+            if not hasattr(self, '_waiting_for_peer_id'):
+                self._waiting_for_peer_id = {}
+            
+            user_id = callback_query.from_user.id
+            self._waiting_for_peer_id.pop(user_id, None)
+            
+            await callback_query.message.edit_text("❌ Peer ID check cancelled.")
+            await callback_query.answer()
 
     async def handle_dmmessages(self, client: Client, message: Message):
         """Show DM message topics menu"""
@@ -2667,8 +2690,9 @@ class TelegramTradingBot:
             response = "**Active Trial Members**\n\n"
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
-            for member_id, data_item in list(
-                    AUTO_ROLE_CONFIG['active_members'].items())[:20]:
+            # Sort by time remaining (ascending - least time first)
+            members_with_time = []
+            for member_id, data_item in AUTO_ROLE_CONFIG['active_members'].items():
                 expiry = datetime.fromisoformat(
                     data_item.get('expiry_time', current_time.isoformat()))
                 if expiry.tzinfo is None:
@@ -2676,6 +2700,12 @@ class TelegramTradingBot:
 
                 time_left = expiry - current_time
                 total_seconds = max(0, time_left.total_seconds())
+                members_with_time.append((member_id, data_item, total_seconds))
+
+            # Sort by time remaining (ascending)
+            members_with_time.sort(key=lambda x: x[2])
+
+            for member_id, data_item, total_seconds in members_with_time[:20]:
                 hours = int(total_seconds // 3600)
                 minutes = int((total_seconds % 3600) // 60)
 
@@ -2701,16 +2731,23 @@ class TelegramTradingBot:
             menu_id = f"rt_{int(time.time() * 1000)}"
             user_mapping = {}
             buttons = []
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
-            for idx, (user_id_str, member_data) in enumerate(
-                    list(AUTO_ROLE_CONFIG['active_members'].items())[:20]):
-                user_mapping[str(idx)] = user_id_str
+            # Sort by time remaining (ascending - least time first)
+            members_with_time = []
+            for user_id_str, member_data in AUTO_ROLE_CONFIG['active_members'].items():
                 expiry = datetime.fromisoformat(member_data.get('expiry_time', ''))
                 if expiry.tzinfo is None:
                     expiry = AMSTERDAM_TZ.localize(expiry)
 
-                total_seconds = max(0, (expiry - datetime.now(
-                    pytz.UTC).astimezone(AMSTERDAM_TZ)).total_seconds())
+                total_seconds = max(0, (expiry - current_time).total_seconds())
+                members_with_time.append((user_id_str, member_data, total_seconds))
+
+            # Sort by time remaining (ascending)
+            members_with_time.sort(key=lambda x: x[2])
+
+            for idx, (user_id_str, member_data, total_seconds) in enumerate(members_with_time[:20]):
+                user_mapping[str(idx)] = user_id_str
                 hours = int(total_seconds // 3600)
                 minutes = int((total_seconds % 3600) // 60)
 
@@ -2742,8 +2779,22 @@ class TelegramTradingBot:
 
             # Add active members if they exist
             if AUTO_ROLE_CONFIG['active_members']:
-                for idx, (user_id_str, member_data) in enumerate(
-                        list(AUTO_ROLE_CONFIG['active_members'].items())[:20]):
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                
+                # Sort by time remaining (ascending - least time first)
+                members_with_time = []
+                for user_id_str, member_data in AUTO_ROLE_CONFIG['active_members'].items():
+                    expiry = datetime.fromisoformat(member_data.get('expiry_time', ''))
+                    if expiry.tzinfo is None:
+                        expiry = AMSTERDAM_TZ.localize(expiry)
+                    
+                    total_seconds = max(0, (expiry - current_time).total_seconds())
+                    members_with_time.append((user_id_str, member_data, total_seconds))
+                
+                # Sort by time remaining (ascending)
+                members_with_time.sort(key=lambda x: x[2])
+                
+                for idx, (user_id_str, member_data, total_seconds) in enumerate(members_with_time[:20]):
                     user_mapping[str(idx)] = user_id_str
                     buttons.append([
                         InlineKeyboardButton(
@@ -4269,17 +4320,6 @@ class TelegramTradingBot:
                         dm_3_sent BOOLEAN DEFAULT FALSE,
                         dm_7_sent BOOLEAN DEFAULT FALSE,
                         dm_14_sent BOOLEAN DEFAULT FALSE
-                    )
-                ''')
-
-                await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS pending_welcome_dms (
-                        member_id BIGINT PRIMARY KEY,
-                        guild_id BIGINT NOT NULL,
-                        joined_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                        scheduled_send_time TIMESTAMP WITH TIME ZONE NOT NULL,
-                        sent BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
                 ''')
 
