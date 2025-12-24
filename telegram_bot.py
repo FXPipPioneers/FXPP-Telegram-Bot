@@ -425,6 +425,10 @@ class TelegramTradingBot:
         async def dmmessages_command(client, message: Message):
             await self.handle_dmmessages(client, message)
 
+        @self.app.on_message(filters.command("peeridstatus"))
+        async def peeridstatus_command(client, message: Message):
+            await self.handle_peer_id_status(client, message)
+
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
             await self.process_join_request(client, join_request)
@@ -2393,6 +2397,68 @@ class TelegramTradingBot:
             await callback_query.message.edit_text(f"❌ Error: {str(e)}")
             await callback_query.answer()
 
+    async def handle_peer_id_status(self, client: Client, message: Message):
+        """Check if a user's peer ID has been established"""
+        if not await self.is_owner(message.from_user.id):
+            return
+        
+        args = message.text.split()
+        if len(args) < 2:
+            await message.reply("Usage: `/peeridstatus <user_id>`")
+            return
+        
+        try:
+            user_id = int(args[1])
+        except ValueError:
+            await message.reply("❌ Invalid user ID. Please provide a valid number.")
+            return
+        
+        if not self.db_pool:
+            await message.reply("❌ Database not available")
+            return
+        
+        try:
+            async with self.db_pool.acquire() as conn:
+                peer_check = await conn.fetchrow(
+                    'SELECT * FROM peer_id_checks WHERE user_id = $1',
+                    user_id
+                )
+            
+            if not peer_check:
+                await message.reply(f"❌ No peer ID check found for user {user_id}")
+                return
+            
+            is_established = peer_check['peer_id_established']
+            established_at = peer_check['established_at']
+            joined_at = peer_check['joined_at']
+            current_delay = peer_check['current_delay_minutes']
+            welcome_sent = peer_check['welcome_dm_sent']
+            
+            status_text = f"**Peer ID Status for User {user_id}**\n\n"
+            
+            if is_established:
+                status_text += f"✅ **Peer ID: ESTABLISHED**\n"
+                if established_at:
+                    status_text += f"📅 Established at: {established_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                status_text += f"💬 Welcome DM sent: {'Yes ✓' if welcome_sent else 'No ✗'}\n"
+            else:
+                status_text += f"⏳ **Peer ID: NOT YET ESTABLISHED**\n"
+                status_text += f"📅 Joined at: {joined_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                status_text += f"⏱️ Current retry delay: {current_delay} minutes\n"
+                status_text += f"💬 Welcome DM sent: {'Yes ✓' if welcome_sent else 'No ✗'}\n"
+                
+                # Calculate time elapsed
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                if joined_at.tzinfo is None:
+                    joined_at = AMSTERDAM_TZ.localize(joined_at)
+                elapsed = (current_time - joined_at).total_seconds() / 3600
+                status_text += f"⏳ Time elapsed: {elapsed:.1f} hours\n"
+            
+            await message.reply(status_text)
+            
+        except Exception as e:
+            await message.reply(f"❌ Error checking peer ID status: {str(e)}")
+
     async def handle_dmmessages(self, client: Client, message: Message):
         """Show DM message topics menu"""
         if not await self.is_owner(message.from_user.id):
@@ -3407,6 +3473,19 @@ class TelegramTradingBot:
         }
 
         await self.save_auto_role_config()
+        
+        # Record trial activation in database for /newmemberslist command
+        if self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute('''
+                        INSERT INTO vip_trial_activations (user_id, activation_date, expiry_date)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (user_id) DO UPDATE SET
+                        activation_date = $2, expiry_date = $3
+                    ''', user.id, current_time, expiry_time)
+            except Exception as e:
+                logger.error(f"Error recording trial activation in database: {e}")
         
         # NOTE: Welcome DM is sent to users when they join the FREE group, not here.
         # Users who join the VIP group have already activated their trial by clicking the invite link.
@@ -5194,6 +5273,7 @@ class TelegramTradingBot:
         """Recover and send missed 24h/3h pre-expiration warnings"""
         current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
         recovered_warnings = 0
+        warning_statuses = []
         
         try:
             for member_id, data in list(AUTO_ROLE_CONFIG['active_members'].items()):
@@ -5216,6 +5296,9 @@ class TelegramTradingBot:
                     data['warning_24h_sent'] = True
                     recovered_warnings += 1
                     await self.save_auto_role_config()
+                    warning_statuses.append(f"24h warning: {member_id}")
+                elif data['warning_24h_sent'] and hours_left <= 24 and hours_left > 0:
+                    warning_statuses.append(f"24h already sent: {member_id}")
                 
                 # Check for missed 3-hour warning
                 if not data['warning_3h_sent'] and hours_left <= 3 and hours_left > 0:
@@ -5223,9 +5306,15 @@ class TelegramTradingBot:
                     data['warning_3h_sent'] = True
                     recovered_warnings += 1
                     await self.save_auto_role_config()
+                    warning_statuses.append(f"3h warning: {member_id}")
+                elif data['warning_3h_sent'] and hours_left <= 3 and hours_left > 0:
+                    warning_statuses.append(f"3h already sent: {member_id}")
             
             if recovered_warnings > 0:
-                await self.log_to_debug(f"✅ Recovered {recovered_warnings} missed pre-expiration warnings")
+                status_msg = " | ".join(warning_statuses)
+                await self.log_to_debug(f"✅ Recovered {recovered_warnings} missed pre-expiration warnings: {status_msg}")
+            elif warning_statuses:
+                await self.log_to_debug(f"ℹ️ All {len(AUTO_ROLE_CONFIG['active_members'])} active members checked - all warnings already sent")
         
         except Exception as e:
             logger.error(f"Error checking offline preexpiration warnings: {e}")
@@ -5503,11 +5592,13 @@ class TelegramTradingBot:
                     if not data['warning_24h_sent'] and 23 < hours_left <= 24:
                         await self.send_24hr_warning(member_id)
                         data['warning_24h_sent'] = True
+                        await self.save_auto_role_config()
 
                     # Send 3-hour warning
                     if not data['warning_3h_sent'] and 2.9 < hours_left <= 3:
                         await self.send_3hr_warning(member_id)
                         data['warning_3h_sent'] = True
+                        await self.save_auto_role_config()
 
             except Exception as e:
                 await self.log_to_debug(f"Error in preexpiration warning loop: {e}", is_error=True)
@@ -5834,6 +5925,7 @@ class TelegramTradingBot:
                     BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
                     BotCommand("dmmessages", "Preview DM message templates"),
+                    BotCommand("peeridstatus", "Check if peer ID is connected for a user"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM statistics"),
                 ]
@@ -6049,7 +6141,7 @@ class TelegramTradingBot:
         # Note: recover_missed_signals() uses get_chat_history() which is not available to bots in Telegram API
         # Bots cannot retrieve message history from groups/channels - this is a fundamental API limitation
         await self.check_offline_joiners()
-        await self.check_offline_preexpiration_warnings()
+        # NOTE: Preexpiration warnings are handled by preexpiration_warning_loop() - removed duplicate startup call to prevent spamming
         await self.check_offline_followup_dms()
         await self.check_offline_engagement_discounts()
         await self.validate_and_fix_trial_expiry_times()
