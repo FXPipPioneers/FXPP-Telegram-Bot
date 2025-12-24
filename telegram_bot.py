@@ -297,9 +297,57 @@ PRICE_TRACKING_CONFIG = {
     ["currencybeacon", "exchangerate_api", "currencylayer", "abstractapi"],
     "check_interval":
     120,
+    "last_price_check_time": None,
 }
 
 PENDING_ENTRIES = {}
+
+MESSAGE_TEMPLATES = {
+    "Free Trial Heads Up": {
+        "24-Hour Warning": {
+            "id": "ft_24hr",
+            "message": "⏰ **REMINDER! Your 3-day free trial for our VIP Group will expire in 24 hours**.\n\nAfter that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
+        },
+        "3-Hour Warning": {
+            "id": "ft_3hr",
+            "message": "⏰ **FINAL REMINDER! Your 3-day free trial for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and get permanent access to our VIP Group.\n\n**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
+        }
+    },
+    "3/7/14 Day Follow-ups": {
+        "3 Days After Trial Ends": {
+            "id": "fu_3day",
+            "message": "Hey! It's been 3 days since your **3-day free access to the VIP Group** ended. We truly hope you got value from the **20+ trading signals** you received during that time.\n\nAs you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\nWe'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+        },
+        "7 Days After Trial Ends": {
+            "id": "fu_7day",
+            "message": "It's been a week since your VIP Group trial ended. Since then, our **VIP members have been catching trade setups daily in the VIP Group**.\n\nIf you found value in just 3 days, imagine what results you could've been seeing by now with full access. It's all about **consistency and staying connected to the right information**.\n\nWe'd like to **personally invite you to rejoin the VIP Group** and get back into the rhythm.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+        },
+        "14 Days After Trial Ends": {
+            "id": "fu_14day",
+            "message": "Hey! It's been two weeks since your free access to the VIP Group ended. We hope you've stayed active since then.\n\nIf you've been trading solo or passively following the free channel, you might be feeling the difference. In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. That edge can make all the difference over time.\n\nWe'd love to **invite you back into the VIP Group** and help you start compounding results again.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+        }
+    },
+    "Welcome & Onboarding": {
+        "Welcome DM (New Free Group Member)": {
+            "id": "welcome_free",
+            "message": "**Hey, Welcome to FX Pip Pioneers!**\n\n**Want to try our VIP Group for FREE?**\nWe're offering a **3-day free trial** of our VIP Group where you'll receive **6+ high-quality trade signals per day**.\n\n**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\nGood luck trading!"
+        },
+        "Monday Activation (Weekend Delay)": {
+            "id": "monday_activation",
+            "message": "Hey! The weekend is over, so the trading markets have been opened again. That means your 3-day welcome gift has officially started. You now have full access to the VIP Group. Let's make the most of it by securing some wins together!"
+        }
+    },
+    "Engagement & Offers": {
+        "Engagement Discount (50% Off)": {
+            "id": "engagement_discount",
+            "message": "Hey! 👋 We noticed that you've been engaging with our signals in the Free Group. We want to say that we truly appreciate it!\n\nAs a thank you for your loyalty and engagement, we want to give you something special: **exclusive 50% discount for access to our VIP Group.**\n\nHere's what you'll unlock:\n• **36+ expert signals per week** (vs 6 per week in the free group)\n• **6+ trade signals PER DAY** from our professional trading team\n• Real-time price tracking and risk management\n\n**Your exclusive discount code is:** `Thank_You!50!`\n\n**You can upgrade to VIP and apply your discount code here:** https://whop.com/gold-pioneer/gold-pioneer/"
+        },
+        "Daily VIP Trial Offer": {
+            "id": "daily_trial_offer",
+            "message": "Want to try our VIP Group for FREE?\n\nWe're offering a 3-day free trial of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\nYour free trial will automatically be activated once you join our VIP group through this link: https://t.me/+5X18tTjgM042ODU0"
+        }
+    }
+}
 
 
 class TelegramTradingBot:
@@ -369,6 +417,10 @@ class TelegramTradingBot:
         async def newmemberslist_command(client, message: Message):
             await self.handle_newmemberslist(client, message)
 
+        @self.app.on_message(filters.command("dmmessages"))
+        async def dmmessages_command(client, message: Message):
+            await self.handle_dmmessages(client, message)
+
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
             await self.process_join_request(client, join_request)
@@ -411,17 +463,21 @@ class TelegramTradingBot:
         async def newmemberslist_callback(client, callback_query: CallbackQuery):
             await self._handle_newmemberslist_callback(client, callback_query)
 
+        @self.app.on_callback_query(filters.regex("^dmm_"))
+        async def dmmessages_callback(client, callback_query: CallbackQuery):
+            await self._handle_dmmessages_callback(client, callback_query)
+
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist"
+                "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
             ]))
         async def text_input_handler(client, message: Message):
             await self.handle_text_input(client, message)
 
         @self.app.on_message(filters.group & filters.text & ~filters.command([
             "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
-            "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist"
+            "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
         ]))
         async def group_message_handler(client, message: Message):
             await self.handle_group_message(client, message)
@@ -1468,6 +1524,24 @@ class TelegramTradingBot:
         if not await self.is_owner(message.from_user.id):
             return
 
+        # Parse subcommand from message text
+        text_parts = message.text.split()
+        subcommand = text_parts[1].lower() if len(text_parts) > 1 else None
+        
+        if subcommand == "list":
+            await self.show_active_trades_list(message)
+        elif subcommand == "position" and len(text_parts) > 2 and text_parts[2].lower() == "guide":
+            await self.show_position_guide(message)
+        else:
+            # Show help message with subcommand options
+            help_text = ("**Active Trades Command**\n\n"
+                        "Usage:\n"
+                        "• `/activetrades list` - Show list of active trades with prices\n"
+                        "• `/activetrades position guide` - Show what each color/emoji means")
+            await message.reply(help_text)
+    
+    async def show_active_trades_list(self, message: Message):
+        """Display list of active trades with current prices and positions"""
         trades = PRICE_TRACKING_CONFIG['active_trades']
 
         if not trades:
@@ -1476,8 +1550,15 @@ class TelegramTradingBot:
             )
             return
 
+        # Calculate remaining time until next refresh
+        remaining_seconds = PRICE_TRACKING_CONFIG['check_interval']
+        last_check_time = PRICE_TRACKING_CONFIG.get('last_price_check_time')
+        if last_check_time:
+            elapsed = (datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ) - last_check_time).total_seconds()
+            remaining_seconds = max(0, int(PRICE_TRACKING_CONFIG['check_interval'] - elapsed))
+
         response = f"**Active Trades ({len(trades)})**\n"
-        response += f"Next refresh in: {PRICE_TRACKING_CONFIG['check_interval']}s\n\n"
+        response += f"Next refresh in: {remaining_seconds}s\n\n"
 
         for msg_id, trade in list(trades.items())[:10]:
             pair = trade.get('pair', 'Unknown')
@@ -1487,11 +1568,6 @@ class TelegramTradingBot:
             tp2 = trade.get('tp2_price', trade.get('tp2', 0))
             tp3 = trade.get('tp3_price', trade.get('tp3', 0))
             sl = trade.get('sl_price', trade.get('sl', 0))
-            status = trade.get('status', 'active')
-            tp_hits = trade.get('tp_hits', [])
-            breakeven = trade.get('breakeven_active', False)
-            assigned_api = trade.get('assigned_api', 'currencybeacon')
-            manual_overrides = trade.get('manual_overrides', [])
 
             live_price = await self.get_live_price(pair)
 
@@ -1504,13 +1580,30 @@ class TelegramTradingBot:
                 price_line = "**Current: N/A**"
                 position_text = "_Unable to get price_"
 
-
             response += f"**{pair}** - {action} | {price_line} | {position_text}\n"
 
         if len(trades) > 10:
             response += f"_...and {len(trades) - 10} more trades_"
 
         await message.reply(response)
+    
+    async def show_position_guide(self, message: Message):
+        """Display the position guide explaining all colors and their meanings"""
+        guide = ("**Position Guide - Trade Status Indicators**\n\n"
+                "🔴 = **At/Beyond SL**\n"
+                "   Price is at or has crossed the stop loss level (trade should be closed)\n\n"
+                "🟡 = **At/Near Entry**\n"
+                "   Price is at or very close to the entry point\n\n"
+                "🟠 = **Between Entry & TP1**\n"
+                "   Price is in profit but hasn't reached the first take profit level yet\n\n"
+                "🟢 = **Between TP1 & TP2**\n"
+                "   Price has passed TP1 and is now targeting TP2\n\n"
+                "💚 = **Between TP2 & TP3**\n"
+                "   Price has passed TP2 (breakeven is now active) and is targeting TP3\n\n"
+                "🚀 = **Max Profit (Beyond TP3)**\n"
+                "   Price has exceeded all take profit levels - maximum profit achieved!")
+        
+        await message.reply(guide)
 
     def analyze_trade_position(self, action: str, entry: float, tp1: float,
                                tp2: float, tp3: float, sl: float,
@@ -2215,39 +2308,160 @@ class TelegramTradingBot:
             await callback_query.answer()
 
     async def _show_vip_trial_joiners(self, callback_query: CallbackQuery):
-        """Show VIP trial joiners with time remaining"""
+        """Show VIP trial joiners grouped by activation date with daily and weekly totals"""
+        if not self.db_pool:
+            await callback_query.message.edit_text("❌ Database not available")
+            await callback_query.answer()
+            return
+
         try:
-            if not AUTO_ROLE_CONFIG['active_members']:
-                await callback_query.message.edit_text("**VIP Trial Joiners**\n\nNo active VIP trials.")
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            monday = current_time - timedelta(days=current_time.weekday())
+            sunday = monday + timedelta(days=6)
+
+            async with self.db_pool.acquire() as conn:
+                trials = await conn.fetch(
+                    '''SELECT user_id, activation_date FROM vip_trial_activations 
+                       WHERE activation_date >= $1 AND activation_date <= $2
+                       ORDER BY activation_date DESC''',
+                    monday.date(), sunday.date()
+                )
+
+            if not trials:
+                await callback_query.message.edit_text(
+                    f"**VIP Trial Joiners - This Week**\n\n"
+                    f"Monday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n\n"
+                    f"No new trial activations this week."
+                )
                 await callback_query.answer()
                 return
 
-            response = "**Active VIP Trial Members**\n\n"
-            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            trials_by_date = {}
+            for row in trials:
+                date_key = row['activation_date'].strftime('%d-%m-%Y')
+                if date_key not in trials_by_date:
+                    trials_by_date[date_key] = []
+                
+                # Get time remaining for this user
+                if row['user_id'] in AUTO_ROLE_CONFIG['active_members']:
+                    data_item = AUTO_ROLE_CONFIG['active_members'][row['user_id']]
+                    expiry = datetime.fromisoformat(
+                        data_item.get('expiry_time', current_time.isoformat()))
+                    if expiry.tzinfo is None:
+                        expiry = AMSTERDAM_TZ.localize(expiry)
+                    
+                    time_left = expiry - current_time
+                    total_seconds = max(0, time_left.total_seconds())
+                    hours = int(total_seconds // 3600)
+                    minutes = int((total_seconds % 3600) // 60)
+                    
+                    trials_by_date[date_key].append(f"User {row['user_id']} ({hours}h {minutes}m left)")
+                else:
+                    trials_by_date[date_key].append(f"User {row['user_id']} (expired)")
 
-            for member_id, data_item in sorted(
-                    AUTO_ROLE_CONFIG['active_members'].items(),
-                    key=lambda x: datetime.fromisoformat(x[1].get('expiry_time', current_time.isoformat())).timestamp() if x[1].get('expiry_time') else 0
-            ):
-                expiry = datetime.fromisoformat(
-                    data_item.get('expiry_time', current_time.isoformat()))
-                if expiry.tzinfo is None:
-                    expiry = AMSTERDAM_TZ.localize(expiry)
+            # Calculate weekly total
+            total_weekly = len(trials)
+            
+            text = f"**VIP Trial Joiners - This Week**\n\nMonday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n"
+            text += f"**📊 Total This Week: {total_weekly} members**\n\n"
+            
+            for date in sorted(trials_by_date.keys(), reverse=True):
+                users = ", ".join(trials_by_date[date])
+                daily_count = len(trials_by_date[date])
+                text += f"**{date}** ({daily_count}): {users}\n"
 
-                time_left = expiry - current_time
-                total_seconds = max(0, time_left.total_seconds())
-                hours = int(total_seconds // 3600)
-                minutes = int((total_seconds % 3600) // 60)
-
-                weekend = " (weekend)" if data_item.get(
-                    'weekend_delayed') else ""
-                response += f"User {member_id}: {hours}h {minutes}m left{weekend}\n"
-
-            await callback_query.message.edit_text(response)
+            await callback_query.message.edit_text(text)
             await callback_query.answer()
         except Exception as e:
             await callback_query.message.edit_text(f"❌ Error: {str(e)}")
             await callback_query.answer()
+
+    async def handle_dmmessages(self, client: Client, message: Message):
+        """Show DM message topics menu"""
+        if not await self.is_owner(message.from_user.id):
+            return
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Free Trial Heads Up", callback_data="dmm_topic_ft")],
+            [InlineKeyboardButton("📅 3/7/14 Day Follow-ups", callback_data="dmm_topic_fu")],
+            [InlineKeyboardButton("👋 Welcome & Onboarding", callback_data="dmm_topic_wo")],
+            [InlineKeyboardButton("🎁 Engagement & Offers", callback_data="dmm_topic_eo")],
+            [InlineKeyboardButton("❌ Close", callback_data="dmm_close")]
+        ])
+
+        await message.reply(
+            "**DM Message Templates**\n\n"
+            "Select a topic to preview the DM messages:\n\n"
+            "📢 **Free Trial Heads Up** - Trial expiration warnings (24hr, 3hr)\n"
+            "📅 **3/7/14 Day Follow-ups** - Post-trial follow-up messages\n"
+            "👋 **Welcome & Onboarding** - Welcome and activation messages\n"
+            "🎁 **Engagement & Offers** - Discount and trial offer messages",
+            reply_markup=keyboard
+        )
+
+    async def _handle_dmmessages_callback(self, client: Client, callback_query: CallbackQuery):
+        """Handle DM message selection"""
+        if not await self.is_owner(callback_query.from_user.id):
+            await callback_query.answer("Restricted to bot owner.", show_alert=True)
+            return
+
+        data = callback_query.data
+
+        if data == "dmm_close":
+            await callback_query.message.edit_text("❌ Closed.")
+            await callback_query.answer()
+            return
+
+        topic_map = {
+            "dmm_topic_ft": "Free Trial Heads Up",
+            "dmm_topic_fu": "3/7/14 Day Follow-ups",
+            "dmm_topic_wo": "Welcome & Onboarding",
+            "dmm_topic_eo": "Engagement & Offers"
+        }
+
+        for callback_id, topic_name in topic_map.items():
+            if data == callback_id:
+                topic = MESSAGE_TEMPLATES[topic_name]
+                buttons = []
+                
+                for msg_title in topic.keys():
+                    msg_id = topic[msg_title]["id"]
+                    buttons.append([InlineKeyboardButton(f"📝 {msg_title}", callback_data=f"dmm_msg_{msg_id}")])
+                
+                buttons.append([InlineKeyboardButton("🔙 Back", callback_data="dmm_back")])
+                keyboard = InlineKeyboardMarkup(buttons)
+
+                await callback_query.message.edit_text(
+                    f"**{topic_name}**\n\nSelect a message to preview:",
+                    reply_markup=keyboard
+                )
+                await callback_query.answer()
+                return
+
+        if data == "dmm_back":
+            await self.handle_dmmessages(client, callback_query.message)
+            await callback_query.answer()
+            return
+
+        if data.startswith("dmm_msg_"):
+            msg_id = data.replace("dmm_msg_", "")
+            
+            for topic in MESSAGE_TEMPLATES.values():
+                for msg_title, msg_data in topic.items():
+                    if msg_data["id"] == msg_id:
+                        msg_content = msg_data["message"]
+                        buttons = [[InlineKeyboardButton("🔙 Back", callback_data="dmm_back")]]
+                        keyboard = InlineKeyboardMarkup(buttons)
+                        
+                        await callback_query.message.edit_text(
+                            f"**Preview: {msg_title}**\n\n{msg_content}",
+                            reply_markup=keyboard
+                        )
+                        await callback_query.answer()
+                        logger.info(f"Owner previewed DM message: {msg_title}")
+                        return
+
+        await callback_query.answer()
 
     async def execute_send_welcome_dm(self, callback_query: CallbackQuery, menu_id: str, context: dict, user_message: Message = None):
         """Execute the actual welcome DM send"""
@@ -3064,10 +3278,10 @@ class TelegramTradingBot:
 
         try:
             await client.send_message(user.id, welcome_dm)
-            await self.log_to_debug(
-                f"Sent welcome DM to {user.first_name} about VIP trial")
+            logger.info(f"✅ Sent welcome DM to {user.first_name} (ID: {user.id}) about VIP trial")
+            await self.log_to_debug(f"✅ Sent welcome DM to {user.first_name} (ID: {user.id}) about VIP trial")
         except Exception as e:
-            error_msg = f"Could not send welcome DM to {user.first_name}, will retry in 2 minutes: {e}"
+            error_msg = f"❌ Could not send welcome DM to {user.first_name} (ID: {user.id}), will retry in 2 minutes: {e}"
             logger.error(error_msg)
             await self.log_to_debug(error_msg, is_error=True)
             # Track for retry
@@ -3488,6 +3702,10 @@ class TelegramTradingBot:
         tp_hits = trade_data.get('tp_hits', [])
         breakeven_active = trade_data.get('breakeven_active', False)
         live_entry = trade_data.get('live_entry') or trade_data.get('entry')
+        
+        # Rule 1: If TP2 was already hit, ensure breakeven protection is active
+        if 'TP2' in tp_hits:
+            breakeven_active = True
 
         # Try assigned API first, then fallback to all APIs if it fails
         current_price = await self.get_live_price_with_fallback(pair, trade_data.get('assigned_api'))
@@ -3502,8 +3720,10 @@ class TelegramTradingBot:
                     await self.handle_breakeven_hit(message_id, trade_data)
                     return
             elif current_price <= sl:
-                await self.handle_sl_hit(message_id, trade_data, current_price)
-                return
+                # Rule 2: SL cannot hit after TP2 (breakeven protection)
+                if 'TP2' not in tp_hits:
+                    await self.handle_sl_hit(message_id, trade_data, current_price)
+                    return
 
             if 'TP1' not in tp_hits and current_price >= tp1:
                 await self.handle_tp_hit(message_id, trade_data, 'TP1',
@@ -3521,8 +3741,10 @@ class TelegramTradingBot:
                     await self.handle_breakeven_hit(message_id, trade_data)
                     return
             elif current_price >= sl:
-                await self.handle_sl_hit(message_id, trade_data, current_price)
-                return
+                # Rule 2: SL cannot hit after TP2 (breakeven protection)
+                if 'TP2' not in tp_hits:
+                    await self.handle_sl_hit(message_id, trade_data, current_price)
+                    return
 
             if 'TP1' not in tp_hits and current_price <= tp1:
                 await self.handle_tp_hit(message_id, trade_data, 'TP1',
@@ -3550,7 +3772,6 @@ class TelegramTradingBot:
 
         if tp_level == 'TP2' and not trade.get('breakeven_active'):
             trade['breakeven_active'] = True
-            await self.send_breakeven_notification(message_id, trade)
 
         if tp_level == 'TP3':
             trade['status'] = 'completed'
@@ -3999,6 +4220,7 @@ class TelegramTradingBot:
                         manual_overrides TEXT DEFAULT '',
                         channel_message_map TEXT DEFAULT '',
                         all_channel_ids TEXT DEFAULT '',
+                        manual_tracking_only BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                         last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
@@ -4037,6 +4259,9 @@ class TelegramTradingBot:
                     )
                     await conn.execute(
                         'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS group_name VARCHAR(30) DEFAULT \'\''
+                    )
+                    await conn.execute(
+                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS manual_tracking_only BOOLEAN DEFAULT FALSE'
                     )
                     await conn.execute(
                         'ALTER TABLE active_trades ALTER COLUMN message_id TYPE VARCHAR(100)'
@@ -4415,7 +4640,9 @@ class TelegramTradingBot:
                         'all_channel_ids':
                         all_channel_ids,
                         'group_name':
-                        row.get('group_name', '')
+                        row.get('group_name', ''),
+                        'manual_tracking_only':
+                        row.get('manual_tracking_only', False)
                     }
 
                 logger.info(
@@ -4445,11 +4672,11 @@ class TelegramTradingBot:
                     INSERT INTO active_trades 
                     (message_id, channel_id, guild_id, pair, action, entry_price, tp1_price, tp2_price, tp3_price, sl_price,
                      telegram_entry, telegram_tp1, telegram_tp2, telegram_tp3, telegram_sl, live_entry, assigned_api,
-                     status, tp_hits, breakeven_active, entry_type, manual_overrides, channel_message_map, all_channel_ids, group_name)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+                     status, tp_hits, breakeven_active, entry_type, manual_overrides, channel_message_map, all_channel_ids, group_name, manual_tracking_only)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
                     ON CONFLICT (message_id) DO UPDATE SET
                     status = $18, tp_hits = $19, breakeven_active = $20, manual_overrides = $22, 
-                    channel_message_map = $23, all_channel_ids = $24, group_name = $25, last_updated = NOW()
+                    channel_message_map = $23, all_channel_ids = $24, group_name = $25, manual_tracking_only = $26, last_updated = NOW()
                 ''', message_id, trade_data.get('chat_id', 0),
                     trade_data.get('chat_id', 0), trade_data.get('pair'),
                     trade_data.get('action'), trade_data.get('entry_price'),
@@ -4466,7 +4693,8 @@ class TelegramTradingBot:
                     trade_data.get('breakeven_active', False),
                     trade_data.get('entry_type',
                                    'execution'), manual_overrides_str,
-                    channel_message_map_str, all_channel_ids_str, group_name)
+                    channel_message_map_str, all_channel_ids_str, group_name,
+                    trade_data.get('manual_tracking_only', False))
 
                 await self.log_to_debug(
                     f"Database INSERT successful for message_id: {message_id}")
@@ -5009,6 +5237,9 @@ class TelegramTradingBot:
 
         while self.running:
             try:
+                # Record when this price check cycle started
+                PRICE_TRACKING_CONFIG['last_price_check_time'] = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                
                 if self.is_weekend_market_closed():
                     await asyncio.sleep(PRICE_TRACKING_CONFIG['check_interval']
                                         )
@@ -5195,26 +5426,25 @@ class TelegramTradingBot:
 
     async def send_24hr_warning(self, member_id: str):
         try:
-            message = (
-                f"⏰ **REMINDER! Your 3-day free trial for our VIP Group will expire in 24 hours**.\n\n"
-                f"After that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
-            )
+            message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["24-Hour Warning"]["message"]
             await self.app.send_message(int(member_id), message)
-            logger.info(f"Sent 24-hour warning DM to user {member_id}")
+            logger.info(f"✅ Sent 24-hour trial warning DM to user {member_id}")
+            await self.log_to_debug(f"✅ Sent 24-hour trial warning DM to user {member_id}")
         except Exception as e:
-            await self.log_to_debug(f"Could not send 24-hour warning to {member_id}: {e}", is_error=True)
+            error_msg = f"❌ Could not send 24-hour warning DM to {member_id}: {e}"
+            logger.error(error_msg)
+            await self.log_to_debug(error_msg, is_error=True)
 
     async def send_3hr_warning(self, member_id: str):
         try:
-            message = (
-                f"⏰ **FINAL REMINDER! Your 3-day free trial for our VIP Group will expire in just 3 hours**.\n\n"
-                f"You're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and get permanent access to our VIP Group.\n\n"
-                f"**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
-            )
+            message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["3-Hour Warning"]["message"]
             await self.app.send_message(int(member_id), message)
-            logger.info(f"Sent 3-hour warning DM to user {member_id}")
+            logger.info(f"✅ Sent 3-hour trial warning DM to user {member_id}")
+            await self.log_to_debug(f"✅ Sent 3-hour trial warning DM to user {member_id}")
         except Exception as e:
-            await self.log_to_debug(f"Could not send 3-hour warning to {member_id}: {e}", is_error=True)
+            error_msg = f"❌ Could not send 3-hour warning DM to {member_id}: {e}"
+            logger.error(error_msg)
+            await self.log_to_debug(error_msg, is_error=True)
 
     async def track_failed_welcome_dm(self, user_id: int, first_name: str, msg_type: str, message_content: str):
         """Track a failed welcome DM for retry"""
@@ -5244,6 +5474,9 @@ class TelegramTradingBot:
                 
                 async with self.db_pool.acquire() as conn:
                     pending = await conn.fetch('SELECT * FROM pending_welcome_dms ORDER BY created_at ASC LIMIT 10')
+                    
+                    if pending:
+                        await self.log_to_debug(f"🔄 Welcome DM retry cycle: Checking {len(pending)} pending DM(s)...")
                     
                     for row in pending:
                         user_id = row['user_id']
@@ -5287,35 +5520,21 @@ class TelegramTradingBot:
     async def send_followup_dm(self, member_id: str, days: int):
         try:
             if days == 3:
-                message = (
-                    f"Hey! It's been 3 days since your **3-day free access to the VIP Group** ended. We truly hope you got value from the **20+ trading signals** you received during that time.\n\n"
-                    f"As you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\n"
-                    f"We'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n"
-                    f"**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-                )
+                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["3 Days After Trial Ends"]["message"]
             elif days == 7:
-                message = (
-                    f"It's been a week since your VIP Group trial ended. Since then, our **VIP members have been catching trade setups daily in the VIP Group**.\n\n"
-                    f"If you found value in just 3 days, imagine what results you could've been seeing by now with full access. It's all about **consistency and staying connected to the right information**.\n\n"
-                    f"We'd like to **personally invite you to rejoin the VIP Group** and get back into the rhythm.\n\n"
-                    f"**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-                )
+                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["7 Days After Trial Ends"]["message"]
             elif days == 14:
-                message = (
-                    f"Hey! It's been two weeks since your free access to the VIP Group ended. We hope you've stayed active since then.\n\n"
-                    f"If you've been trading solo or passively following the free channel, you might be feeling the difference. In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. That edge can make all the difference over time.\n\n"
-                    f"We'd love to **invite you back into the VIP Group** and help you start compounding results again.\n\n"
-                    f"**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-                )
+                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["14 Days After Trial Ends"]["message"]
             else:
                 return
 
             await self.app.send_message(int(member_id), message)
-            await self.log_to_debug(
-                f"Sent {days}-day follow-up DM to user {member_id}")
+            logger.info(f"✅ Sent {days}-day follow-up DM to user {member_id}")
+            await self.log_to_debug(f"✅ Sent {days}-day follow-up DM to user {member_id}")
         except Exception as e:
-            logger.error(
-                f"Could not send {days}-day follow-up DM to {member_id}: {e}")
+            error_msg = f"❌ Could not send {days}-day follow-up DM to {member_id}: {e}"
+            logger.error(error_msg)
+            await self.log_to_debug(error_msg, is_error=True)
 
     async def monday_activation_loop(self):
         await asyncio.sleep(60)
@@ -5334,26 +5553,22 @@ class TelegramTradingBot:
                                         False) and not data.get(
                                             'monday_notification_sent', False):
                                 try:
-                                    activation_message = (
-                                        "Hey! The weekend is over, so the trading markets have been opened again. "
-                                        "That means your 3-day welcome gift has officially started. "
-                                        "You now have full access to the VIP Group. "
-                                        "Let's make the most of it by securing some wins together!"
-                                    )
+                                    activation_message = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Monday Activation (Weekend Delay)"]["message"]
                                     await self.app.send_message(
                                         int(member_id), activation_message)
                                     logger.info(
-                                        f"Sent Monday activation DM to {member_id}"
+                                        f"✅ Sent Monday activation DM to {member_id}"
                                     )
+                                    await self.log_to_debug(f"✅ Sent Monday activation DM to {member_id}")
 
                                     AUTO_ROLE_CONFIG['active_members'][
                                         member_id][
                                             'monday_notification_sent'] = True
                                     await self.save_auto_role_config()
                                 except Exception as e:
-                                    logger.error(
-                                        f"Could not send Monday activation DM to {member_id}: {e}"
-                                    )
+                                    error_msg = f"❌ Could not send Monday activation DM to {member_id}: {e}"
+                                    logger.error(error_msg)
+                                    await self.log_to_debug(error_msg, is_error=True)
                         except Exception as e:
                             logger.error(
                                 f"Error processing Monday activation for {member_id}: {e}"
@@ -5375,6 +5590,7 @@ class TelegramTradingBot:
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
+                    BotCommand("dmmessages", "Preview DM message templates"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM statistics"),
                 ]
@@ -5447,20 +5663,14 @@ class TelegramTradingBot:
     async def send_engagement_discount_dm(self, user_id: int):
         """Send 50% discount DM to engaged free group members."""
         try:
-            message = (
-                f"Hey! 👋 We noticed that you've been engaging with our signals in the Free Group. We want to say that we truly appreciate it!\n\n"
-                f"As a thank you for your loyalty and engagement, we want to give you something special: **exclusive 50% discount for access to our VIP Group.**\n\n"
-                f"Here's what you'll unlock:\n"
-                f"• **36+ expert signals per week** (vs 6 per week in the free group)\n"
-                f"• **6+ trade signals PER DAY** from our professional trading team\n"
-                f"• Real-time price tracking and risk management\n\n"
-                f"**Your exclusive discount code is:** `Thank_You!50!`\n\n"
-                f"**You can upgrade to VIP and apply your discount code here:** https://whop.com/gold-pioneer/gold-pioneer/"
-            )
+            message = MESSAGE_TEMPLATES["Engagement & Offers"]["Engagement Discount (50% Off)"]["message"]
             await self.app.send_message(user_id, message)
-            logger.info(f"Sent engagement discount DM to user {user_id}")
+            logger.info(f"✅ Sent engagement discount DM to user {user_id}")
+            await self.log_to_debug(f"✅ Sent engagement discount DM to user {user_id}")
         except Exception as e:
-            await self.log_to_debug(f"Could not send engagement discount DM to {user_id}: {e}", is_error=True)
+            error_msg = f"❌ Could not send engagement discount DM to {user_id}: {e}"
+            logger.error(error_msg)
+            await self.log_to_debug(error_msg, is_error=True)
 
     async def daily_vip_trial_offer_loop(self):
         """Daily check at 09:00 Amsterdam time to offer VIP trial to free-only members.
@@ -5509,11 +5719,7 @@ class TelegramTradingBot:
                                 is_in_vip = False
 
                             if not is_in_vip:
-                                offer_message = (
-                                    f"Want to try our VIP Group for FREE?\n\n"
-                                    f"We're offering a 3-day free trial of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\n"
-                                    f"Your free trial will automatically be activated once you join our VIP group through this link: {VIP_TRIAL_INVITE_LINK}"
-                                )
+                                offer_message = MESSAGE_TEMPLATES["Engagement & Offers"]["Daily VIP Trial Offer"]["message"]
                                 
                                 try:
                                     await self.app.send_message(user_id, offer_message)
@@ -5526,9 +5732,12 @@ class TelegramTradingBot:
                                             user_id, current_time
                                         )
                                     
-                                    logger.info(f"Sent VIP trial offer to user {user_id}")
+                                    logger.info(f"✅ Sent daily VIP trial offer DM to user {user_id}")
+                                    await self.log_to_debug(f"✅ Sent daily VIP trial offer DM to user {user_id}")
                                 except Exception as e:
-                                    logger.error(f"Could not send trial offer to {user_id}: {e}")
+                                    error_msg = f"❌ Could not send daily trial offer DM to {user_id}: {e}"
+                                    logger.error(error_msg)
+                                    await self.log_to_debug(error_msg, is_error=True)
 
                     except Exception as e:
                         logger.error(f"Error in daily VIP trial offer check: {e}")
