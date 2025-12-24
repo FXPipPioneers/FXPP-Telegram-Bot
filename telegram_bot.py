@@ -372,12 +372,14 @@ class TelegramTradingBot:
         self.client_session = None
         self.last_online_time = None
         self.running = True
+        self.startup_complete = False
         self.awaiting_price_input = {}
         self.awaiting_custom_pair = {}
         self.override_trade_mappings = {}  # menu_id -> {idx: message_id}
         self.trial_pending_approvals = set(
         )  # Track user IDs approved for trial
         self.last_warning_send_time = {}  # Track last warning send time per user_id
+        self.peer_id_check_state = {}  # Track peer ID checks: user_id -> {joined_at, delay_level, interval, established}
 
         self._register_handlers()
 
@@ -809,8 +811,8 @@ class TelegramTradingBot:
                 if user_id:
                     msg_text += f"\n\n👤 **User ID:** `{user_id}`"
                     
-                    # Build the button URL with optional pre-filled message
-                    button_url = f"tg://user?id={user_id}"
+                    # Build the button URL to open DM with pre-filled message
+                    button_url = f"tg://msg?to={user_id}"
                     if failed_message:
                         # URL-encode the message and add it to the deep link
                         encoded_message = quote(failed_message, safe='')
@@ -1311,11 +1313,12 @@ class TelegramTradingBot:
         user_id = message.from_user.id
 
         if not await self.is_owner(user_id):
-            owner_mention = "@fx_pippioneers"
-            await message.reply(
-                f"❌ **This bot cannot respond to direct messages from members.**\n\n"
-                f"If you need support or have any questions, please contact {owner_mention}."
-            )
+            if self.startup_complete:
+                owner_mention = "@fx_pippioneers"
+                await message.reply(
+                    f"❌ **This bot cannot respond to direct messages from members.**\n\n"
+                    f"If you need support or have any questions, please contact {owner_mention}."
+                )
             return
 
         # Handle retracttrial custom input
@@ -4386,6 +4389,21 @@ class TelegramTradingBot:
                     )
                 ''')
 
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS peer_id_checks (
+                        user_id BIGINT PRIMARY KEY,
+                        joined_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                        peer_id_established BOOLEAN DEFAULT FALSE,
+                        established_at TIMESTAMP WITH TIME ZONE,
+                        current_delay_minutes INT DEFAULT 30,
+                        current_interval_minutes INT DEFAULT 3,
+                        last_check_at TIMESTAMP WITH TIME ZONE,
+                        next_check_at TIMESTAMP WITH TIME ZONE,
+                        welcome_dm_sent BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                ''')
+
             logger.info("Database tables initialized")
 
             await self.load_config_from_db()
@@ -5013,18 +5031,22 @@ class TelegramTradingBot:
             logger.info(f"Found and processed {offline_hits_found} TP/SL hits that occurred while offline")
 
     async def check_offline_joiners(self):
-        """Recover and send welcome DMs to members who joined while bot was offline"""
+        """Track new members for peer ID checks before sending welcome DM (30 min to 24 hour escalation)"""
         if not self.db_pool or not FREE_GROUP_ID:
             return
         
         try:
             all_members = self.app.get_chat_members(FREE_GROUP_ID)
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-            missed_count = 0
+            new_members = 0
             
             async with self.db_pool.acquire() as conn:
-                known_members = await conn.fetch('SELECT user_id FROM free_group_joins')
+                known_members = await conn.fetch('SELECT user_id FROM peer_id_checks')
                 known_user_ids = {row['user_id'] for row in known_members}
+                
+                # Also track in free_group_joins for other features
+                free_group_members = await conn.fetch('SELECT user_id FROM free_group_joins')
+                free_group_user_ids = {row['user_id'] for row in free_group_members}
             
             async for member in all_members:
                 if member.user.is_bot:
@@ -5032,39 +5054,146 @@ class TelegramTradingBot:
                     
                 user_id = member.user.id
                 
+                # New member - add to peer_id_checks with initial 30-minute delay
                 if user_id not in known_user_ids:
-                    missed_count += 1
+                    new_members += 1
+                    next_check = current_time + timedelta(minutes=3)
                     
                     async with self.db_pool.acquire() as conn:
-                        await conn.execute(
-                            '''INSERT INTO free_group_joins (user_id, joined_at, discount_sent)
-                               VALUES ($1, $2, FALSE)
-                               ON CONFLICT (user_id) DO NOTHING''',
-                            user_id, current_time)
-                    
-                    welcome_dm = (
-                        f"**Hey, Welcome to FX Pip Pioneers!**\n\n"
-                        f"**Want to try our VIP Group for FREE?**\n"
-                        f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
-                        f"**6+ high-quality trade signals per day**.\n\n"
-                        f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
-                        f"Good luck trading!")
-                    
-                    try:
-                        await self.app.get_users([user_id])
-                        await asyncio.sleep(1)
-                        await self.app.send_message(user_id, welcome_dm)
-                        await self.log_to_debug(f"Sent missed welcome DM to {member.user.first_name} (joined while offline)", user_id=user_id)
-                    except Exception as e:
-                        await self.track_failed_welcome_dm(user_id, member.user.first_name, "free_group", welcome_dm)
-                        logger.warning(f"Could not send welcome DM to offline joiner {user_id}: {e}")
+                        await conn.execute('''
+                            INSERT INTO peer_id_checks (user_id, joined_at, current_delay_minutes, current_interval_minutes, next_check_at)
+                            VALUES ($1, $2, 30, 3, $3)
+                            ON CONFLICT (user_id) DO NOTHING
+                        ''', user_id, current_time, next_check)
+                        
+                        # Also add to free_group_joins if not already there
+                        if user_id not in free_group_user_ids:
+                            await conn.execute('''
+                                INSERT INTO free_group_joins (user_id, joined_at, discount_sent)
+                                VALUES ($1, $2, FALSE)
+                                ON CONFLICT (user_id) DO NOTHING
+                            ''', user_id, current_time)
             
-            if missed_count > 0:
-                await self.log_to_debug(f"✅ Recovered {missed_count} members who joined while bot was offline")
+            if new_members > 0:
+                await self.log_to_debug(f"✅ Registered {new_members} new members for peer ID verification (30-min to 24-hour escalation)")
         
         except Exception as e:
             logger.error(f"Error checking offline joiners: {e}")
             await self.log_to_debug(f"Error recovering offline joiners: {e}", is_error=True)
+
+    async def check_peer_id_established(self, user_id: int) -> bool:
+        """Attempt to verify peer ID is established by checking if we can interact with the user"""
+        try:
+            await self.app.get_users([user_id])
+            return True
+        except Exception:
+            return False
+
+    async def escalate_peer_id_check(self, delay_level: int) -> tuple:
+        """Get next delay and interval based on escalation level.
+        Level 0: 30 min delay, 3 min interval
+        Level 1: 1 hour delay, 10 min interval  
+        Level 2: 3 hour delay, 20 min interval
+        Level 3+: 24 hour limit, then give up
+        """
+        escalation = [
+            (30, 3),    # Level 0: 30 min delay, check every 3 min
+            (60, 10),   # Level 1: 1 hour delay, check every 10 min
+            (180, 20),  # Level 2: 3 hours delay, check every 20 min
+        ]
+        if delay_level < len(escalation):
+            return escalation[delay_level]
+        return (1440, 20)  # Level 3+: 24 hours (give up after this)
+
+    async def peer_id_escalation_loop(self):
+        """Background loop: escalate peer ID checks until established or 24 hours passed"""
+        await asyncio.sleep(30)
+        
+        while self.running:
+            try:
+                if not self.db_pool:
+                    await asyncio.sleep(60)
+                    continue
+                
+                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                
+                async with self.db_pool.acquire() as conn:
+                    # Get all pending peer ID checks
+                    pending = await conn.fetch('''
+                        SELECT user_id, joined_at, peer_id_established, current_delay_minutes, 
+                               current_interval_minutes, next_check_at
+                        FROM peer_id_checks 
+                        WHERE NOT peer_id_established AND welcome_dm_sent = FALSE
+                        ORDER BY next_check_at ASC
+                    ''')
+                    
+                    for row in pending:
+                        user_id = row['user_id']
+                        joined_at = row['joined_at']
+                        if joined_at.tzinfo is None:
+                            joined_at = AMSTERDAM_TZ.localize(joined_at)
+                        next_check_at = row['next_check_at']
+                        if next_check_at.tzinfo is None:
+                            next_check_at = AMSTERDAM_TZ.localize(next_check_at)
+                        
+                        # Check if it's time to do a peer ID check
+                        if current_time >= next_check_at:
+                            time_elapsed = (current_time - joined_at).total_seconds() / 3600
+                            
+                            # Give up after 24 hours
+                            if time_elapsed > 24:
+                                await conn.execute('''
+                                    UPDATE peer_id_checks SET peer_id_established = FALSE 
+                                    WHERE user_id = $1
+                                ''', user_id)
+                                logger.warning(f"Peer ID check gave up for user {user_id} after 24 hours")
+                                continue
+                            
+                            # Try peer ID check
+                            if await self.check_peer_id_established(user_id):
+                                # Peer ID established! Send welcome DM at next interval
+                                await conn.execute('''
+                                    UPDATE peer_id_checks SET peer_id_established = TRUE, established_at = $1
+                                    WHERE user_id = $2
+                                ''', current_time, user_id)
+                                logger.info(f"Peer ID established for user {user_id}")
+                                await self.log_to_debug(f"✅ Peer ID established for user {user_id} after {time_elapsed:.1f} hours")
+                            else:
+                                # Still not established - schedule next check based on delay progression
+                                delay_mins = row['current_delay_minutes']
+                                interval_mins = row['current_interval_minutes']
+                                
+                                # Calculate time since join
+                                mins_since_join = (current_time - joined_at).total_seconds() / 60
+                                
+                                # Escalate if we've passed current delay threshold
+                                if mins_since_join >= delay_mins:
+                                    # Move to next escalation level
+                                    next_delay, next_interval = await self.escalate_peer_id_check(
+                                        [30, 60, 180].index(delay_mins) + 1 if delay_mins in [30, 60, 180] else 3
+                                    )
+                                    next_check = current_time + timedelta(minutes=next_interval)
+                                    
+                                    await conn.execute('''
+                                        UPDATE peer_id_checks 
+                                        SET current_delay_minutes = $1, current_interval_minutes = $2, next_check_at = $3
+                                        WHERE user_id = $4
+                                    ''', next_delay, next_interval, next_check, user_id)
+                                    
+                                    if next_delay == 1440:
+                                        logger.warning(f"Peer ID check for user {user_id} escalated to 24-hour cycle (final attempt)")
+                                else:
+                                    # Same delay level, schedule next interval check
+                                    next_check = current_time + timedelta(minutes=interval_mins)
+                                    await conn.execute('''
+                                        UPDATE peer_id_checks SET next_check_at = $1 WHERE user_id = $2
+                                    ''', next_check, user_id)
+                
+                await asyncio.sleep(10)  # Check every 10 seconds for due checks
+                
+            except Exception as e:
+                logger.error(f"Error in peer_id_escalation_loop: {e}")
+                await asyncio.sleep(60)
 
     async def check_offline_preexpiration_warnings(self):
         """Recover and send missed 24h/3h pre-expiration warnings"""
@@ -5091,12 +5220,14 @@ class TelegramTradingBot:
                     await self.send_24hr_warning(member_id)
                     data['warning_24h_sent'] = True
                     recovered_warnings += 1
+                    await self.save_auto_role_config()
                 
                 # Check for missed 3-hour warning
                 if not data['warning_3h_sent'] and hours_left <= 3 and hours_left > 0:
                     await self.send_3hr_warning(member_id)
                     data['warning_3h_sent'] = True
                     recovered_warnings += 1
+                    await self.save_auto_role_config()
             
             if recovered_warnings > 0:
                 await self.log_to_debug(f"✅ Recovered {recovered_warnings} missed pre-expiration warnings")
@@ -5456,6 +5587,9 @@ class TelegramTradingBot:
             logger.error(error_msg)
             message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["24-Hour Warning"]["message"]
             await self.log_to_debug(error_msg, is_error=True, user_id=int(member_id), failed_message=message)
+            if str(member_id) in AUTO_ROLE_CONFIG['active_members']:
+                AUTO_ROLE_CONFIG['active_members'][str(member_id)]['warning_24h_sent'] = True
+                await self.save_auto_role_config()
 
     async def send_3hr_warning(self, member_id: str):
         try:
@@ -5468,6 +5602,9 @@ class TelegramTradingBot:
             logger.error(error_msg)
             message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["3-Hour Warning"]["message"]
             await self.log_to_debug(error_msg, is_error=True, user_id=int(member_id), failed_message=message)
+            if str(member_id) in AUTO_ROLE_CONFIG['active_members']:
+                AUTO_ROLE_CONFIG['active_members'][str(member_id)]['warning_3h_sent'] = True
+                await self.save_auto_role_config()
 
     async def track_failed_welcome_dm(self, user_id: int, first_name: str, msg_type: str, message_content: str):
         """Track a failed welcome DM for retry"""
@@ -5922,7 +6059,10 @@ class TelegramTradingBot:
         await self.check_offline_engagement_discounts()
         await self.validate_and_fix_trial_expiry_times()
 
+        self.startup_complete = True
+
         asyncio.create_task(self.price_tracking_loop())
+        asyncio.create_task(self.peer_id_escalation_loop())
         asyncio.create_task(self.trial_expiry_loop())
         asyncio.create_task(self.preexpiration_warning_loop())
         asyncio.create_task(self.followup_dm_loop())
