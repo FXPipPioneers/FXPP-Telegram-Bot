@@ -1328,7 +1328,10 @@ class TelegramTradingBot:
         user_id = message.from_user.id
 
         if not await self.is_owner(user_id):
-            # Silently ignore messages from non-owners
+            # Send support message to non-owners
+            await message.reply(
+                "This is a private trading bot that can only be used by members of the FX Pip Pioneers team. \n\nIf you need support or have questions, please contact @fx_pippioneers."
+            )
             return
 
         # Handle retracttrial custom input
@@ -6190,7 +6193,6 @@ class TelegramTradingBot:
         asyncio.create_task(self.trial_expiry_loop())
         asyncio.create_task(self.preexpiration_warning_loop())
         asyncio.create_task(self.followup_dm_loop())
-        asyncio.create_task(self.heartbeat_loop())
         asyncio.create_task(self.monday_activation_loop())
         asyncio.create_task(self.engagement_tracking_loop())
         asyncio.create_task(self.retry_failed_welcome_dms_loop())
