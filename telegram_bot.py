@@ -809,10 +809,11 @@ class TelegramTradingBot:
     async def log_to_debug(self, message: str, is_error: bool = False, user_id: Optional[int] = None, failed_message: Optional[str] = None):
         if DEBUG_GROUP_ID:
             try:
+                # Standardize professional debug headers
                 if is_error:
-                    msg_text = f"🚨 **ERROR:** {message}\n\n@fx_pippioneers"
+                    msg_text = f"🚨 **SYSTEM ERROR**\n\n**Issue:** {message}\n\n@fx_pippioneers"
                 else:
-                    msg_text = f"**Bot Log:** {message}"
+                    msg_text = f"📊 **SYSTEM LOG**\n\n**Event:** {message}"
                 
                 # Add user ID button if user_id is provided
                 keyboard = None
@@ -2342,7 +2343,7 @@ class TelegramTradingBot:
             await callback_query.answer()
 
     async def _show_vip_trial_joiners(self, callback_query: CallbackQuery):
-        """Show all active VIP trial members with time remaining"""
+        """Show all active VIP trial members with time remaining and join dates"""
         try:
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
             
@@ -2354,13 +2355,22 @@ class TelegramTradingBot:
                 await callback_query.answer()
                 return
 
-            # Get all active trial members
+            # Get all active trial members with dates
             trials_with_time = []
+            joiners_by_date = {}
+            
             for user_id_str, member_data in AUTO_ROLE_CONFIG['active_members'].items():
                 expiry = datetime.fromisoformat(
                     member_data.get('expiry_time', current_time.isoformat()))
                 if expiry.tzinfo is None:
                     expiry = AMSTERDAM_TZ.localize(expiry)
+                
+                joined = datetime.fromisoformat(
+                    member_data.get('joined_at', current_time.isoformat()))
+                if joined.tzinfo is None:
+                    joined = AMSTERDAM_TZ.localize(joined)
+                
+                join_date_str = joined.strftime('%d-%m-%Y')
                 
                 time_left = expiry - current_time
                 total_seconds = max(0, time_left.total_seconds())
@@ -2368,20 +2378,37 @@ class TelegramTradingBot:
                 trials_with_time.append({
                     'user_id': user_id_str,
                     'total_seconds': total_seconds,
-                    'expiry': expiry
+                    'expiry': expiry,
+                    'join_date': join_date_str,
+                    'joined': joined
                 })
+                
+                # Group by date for weekly summary
+                if join_date_str not in joiners_by_date:
+                    joiners_by_date[join_date_str] = 0
+                joiners_by_date[join_date_str] += 1
             
             # Sort by time remaining (ascending - least time first)
             trials_with_time.sort(key=lambda x: x['total_seconds'])
             
             text = "**Active VIP Trial Members**\n\n"
-            text += f"**Total: {len(trials_with_time)} members**\n\n"
+            
+            # Weekly summary
+            total_weekly = len(trials_with_time)
+            text += f"**📊 Total This Week: {total_weekly} members**\n\n"
+            
+            # Show breakdown by date
+            for date_key in sorted(joiners_by_date.keys(), reverse=True):
+                daily_count = joiners_by_date[date_key]
+                text += f"**{date_key}** ({daily_count})\n"
+            
+            text += "\n**Detailed List (sorted by time remaining):**\n\n"
             
             for item in trials_with_time:
                 hours = int(item['total_seconds'] // 3600)
                 minutes = int((item['total_seconds'] % 3600) // 60)
                 status = "⏳" if item['total_seconds'] > 0 else "❌"
-                text += f"{status} User {item['user_id']}: {hours}h {minutes}m left\n"
+                text += f"{status} User {item['user_id']} (joined {item['join_date']}): {hours}h {minutes}m left\n"
 
             await callback_query.message.edit_text(text)
             await callback_query.answer()
@@ -3367,59 +3394,29 @@ class TelegramTradingBot:
             await self.handle_vip_group_join(client, user, invite_link)
 
     async def handle_free_group_join(self, client: Client, user):
-        await self.log_to_debug(
-            f"New member joined FREE group: {user.first_name} (ID: {user.id})")
-
-        # Track free group join for engagement tracking
+        # Track free group join for engagement tracking and peer ID verification
         if self.db_pool:
             try:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 async with self.db_pool.acquire() as conn:
+                    # Track for engagement
                     await conn.execute(
                         '''INSERT INTO free_group_joins (user_id, joined_at, discount_sent)
                            VALUES ($1, $2, FALSE)
                            ON CONFLICT (user_id) DO NOTHING''',
                         user.id, current_time)
+                    
+                    # Track for peer ID verification (30 min delay, check every 3 min)
+                    next_check = current_time + timedelta(minutes=3)
+                    await conn.execute('''
+                        INSERT INTO peer_id_checks (user_id, joined_at, current_delay_minutes, current_interval_minutes, next_check_at)
+                        VALUES ($1, $2, 30, 3, $3)
+                        ON CONFLICT (user_id) DO NOTHING
+                    ''', user.id, current_time, next_check)
+                
+                await self.log_to_debug(f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Peer ID verification scheduled (30m delay)")
             except Exception as e:
                 logger.error(f"Error tracking free group join for {user.id}: {e}")
-
-        welcome_dm = (
-            f"**Hey {user.first_name}, Welcome to FX Pip Pioneers!**\n\n"
-            f"**Want to try our VIP Group for FREE?**\n"
-            f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
-            f"**6+ high-quality trade signals per day**.\n\n"
-            f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
-            f"Good luck trading!")
-
-        # Multi-Check Peer Establishment (3-point system):
-        # Check 1: Instant (second 0) when member joins
-        try:
-            await client.get_users([user.id])
-            logger.info(f"Peer established immediately for {user.first_name} (Check 1)")
-        except Exception as e:
-            logger.debug(f"Peer Check 1 failed for {user.first_name}: {str(e)[:50]}")
-
-        # Check 2: After 7 seconds to reinforce connection
-        await asyncio.sleep(7)
-        try:
-            await client.get_users([user.id])
-            logger.info(f"Peer confirmed for {user.first_name} (Check 2)")
-        except Exception as e:
-            logger.debug(f"Peer Check 2 failed for {user.first_name}: {str(e)[:50]}")
-
-        # Send DM: At second 20 after guaranteed peer establishment
-        await asyncio.sleep(13)  # 7 + 13 = 20 seconds total
-
-        try:
-            await client.send_message(user.id, welcome_dm)
-            logger.info(f"✅ Sent welcome DM to {user.first_name} (ID: {user.id}) about VIP trial")
-            await self.log_to_debug(f"✅ Sent welcome DM to {user.first_name} (ID: {user.id}) about VIP trial", user_id=user.id)
-        except Exception as e:
-            error_msg = f"❌ Could not send welcome DM to {user.first_name} (ID: {user.id}): {e}"
-            logger.error(error_msg)
-            await self.log_to_debug(f"{error_msg} [Will retry in 2 minutes]", is_error=True, user_id=user.id, failed_message=welcome_dm)
-            # Track for retry
-            await self.track_failed_welcome_dm(user.id, user.first_name, "free_group", welcome_dm)
 
     async def handle_vip_group_join(self, client: Client, user, invite_link):
         """
@@ -5270,8 +5267,26 @@ class TelegramTradingBot:
                                     UPDATE peer_id_checks SET peer_id_established = TRUE, established_at = $1
                                     WHERE user_id = $2
                                 ''', current_time, user_id)
-                                logger.info(f"Peer ID established for user {user_id}")
-                                await self.log_to_debug(f"✅ Peer ID established for user {user_id} after {time_elapsed:.1f} hours")
+                                
+                                # Immediately send welcome DM now that peer ID is established
+                                try:
+                                    welcome_dm = (
+                                        f"**Hey {first_name}, Welcome to FX Pip Pioneers!**\n\n"
+                                        f"**Want to try our VIP Group for FREE?**\n"
+                                        f"We're offering a **3-day free trial** of our VIP Group where you'll receive "
+                                        f"**6+ high-quality trade signals per day**.\n\n"
+                                        f"**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\n"
+                                        f"Good luck trading!")
+                                    
+                                    await self.app.send_message(user_id, welcome_dm)
+                                    await conn.execute('UPDATE peer_id_checks SET welcome_dm_sent = TRUE WHERE user_id = $1', user_id)
+                                    
+                                    logger.info(f"✅ Welcome DM sent to user {user_id} after peer ID established")
+                                    await self.log_to_debug(f"✅ Welcome DM successfully sent to {first_name} (ID: {user_id}) - Peer ID established after {time_elapsed:.1f} hours", user_id=user_id)
+                                except Exception as e:
+                                    logger.error(f"Error sending welcome DM after peer established for {user_id}: {e}")
+                                    await self.log_to_debug(f"❌ Peer ID established for {first_name} (ID: {user_id}) but welcome DM failed: {e}", is_error=True, user_id=user_id)
+                                    # It will be retried by retry_failed_welcome_dms_loop or next interval if we don't set welcome_dm_sent
                             else:
                                 # Still not established - schedule next check based on delay progression
                                 delay_mins = row['current_delay_minutes']
