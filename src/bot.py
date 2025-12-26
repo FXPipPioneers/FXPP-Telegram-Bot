@@ -7,9 +7,9 @@ import asyncio
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(BASE_DIR))
 
-from pyrogram import Client as PyClient
 from pyrogram import filters
-from src.core.config import TELEGRAM_BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH, DATABASE_URL
+from pyrogram.client import Client as PyClient
+from src.core.config import TELEGRAM_BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH, DATABASE_URL, BOT_OWNER_USER_ID
 from src.database.manager import DatabaseManager
 from src.core.engine import PriceEngine
 from src.handlers.trading import register_trading_handlers
