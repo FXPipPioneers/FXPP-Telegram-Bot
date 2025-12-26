@@ -42,6 +42,21 @@ async def main():
     register_community_handlers(app, db_manager)
     register_admin_handlers(app, db_manager)
     
+    # Start a dummy health check server for Render Web Service
+    from aiohttp import web
+    async def health_check(request):
+        return web.Response(text="Bot is alive")
+    
+    health_app = web.Application()
+    health_app.router.add_get("/", health_check)
+    runner = web.AppRunner(health_app)
+    await runner.setup()
+    # Use PORT environment variable from Render, or default to 10000
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Health check server started on port {port}")
+    
     logger.info(f"🔑 BOT_OWNER_USER_ID = {BOT_OWNER_USER_ID}")
     
     logger.info("Bot starting...")
