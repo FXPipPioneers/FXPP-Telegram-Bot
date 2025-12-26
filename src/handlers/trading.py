@@ -205,8 +205,8 @@ def register_trading_handlers(app, engine, db_manager):
 
         entry_data = PENDING_ENTRIES[user_id]
 
-        if data.startswith("entry_action_"):
-            action = data.replace("entry_action_", "").upper()
+        if str(data).startswith("entry_action_"):
+            action = str(data).replace("entry_action_", "").upper()
             entry_data['action'] = action
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("Execution (Market)", callback_data="entry_type_execution"),
@@ -216,8 +216,8 @@ def register_trading_handlers(app, engine, db_manager):
                 f"**Create Trading Signal**\n\nAction: **{action}**\n\nStep 2: Select order type:",
                 reply_markup=keyboard)
 
-        elif data.startswith("entry_type_"):
-            entry_type = data.replace("entry_type_", "")
+        elif str(data).startswith("entry_type_"):
+            entry_type = str(data).replace("entry_type_", "")
             entry_data['entry_type'] = entry_type
             # Logic for custom pair input would normally go here via text handler
             await callback_query.message.edit_text(

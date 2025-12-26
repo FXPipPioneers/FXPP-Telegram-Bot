@@ -1,4 +1,5 @@
-from pyrogram import filters, Client as PyClient
+from pyrogram import filters
+from pyrogram.client import Client
 from pyrogram.types import ChatJoinRequest, ChatMemberUpdated
 from pyrogram.enums import ChatMemberStatus
 from src.core.config import VIP_GROUP_ID, FREE_GROUP_ID, AMSTERDAM_TZ, AUTO_ROLE_CONFIG, MESSAGE_TEMPLATES
