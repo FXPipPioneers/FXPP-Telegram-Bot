@@ -52,13 +52,13 @@ class BackgroundEngine:
             logger.info("✅ Pre-expiration Warning Loop started")
 
             # 5. Follow-up DM Loop
-            followup_loop = FollowupDMLoop(self.app, self.db.pool, self.app)
+            followup_loop = FollowupDMLoop(self.app, self.app)
             task5 = asyncio.create_task(followup_loop.run())
             self.loop_tasks.append(task5)
             logger.info("✅ Follow-up DM Loop started")
             
             # 6. Monday Activation Loop
-            monday_loop = MondayActivationLoop(self.app, self.db.pool)
+            monday_loop = MondayActivationLoop(self.app, self.app)
             task6 = asyncio.create_task(monday_loop.run())
             self.loop_tasks.append(task6)
             logger.info("✅ Monday Activation Loop started")
@@ -70,7 +70,7 @@ class BackgroundEngine:
             logger.info("✅ Engagement Tracking Loop started")
             
             # 8. Daily Trial Offer Loop
-            daily_loop = DailyVIPTrialOfferLoop(self.app, self.app.db_pool, self.db)
+            daily_loop = DailyVIPTrialOfferLoop(self.app, self.db.pool, self.app)
             task8 = asyncio.create_task(daily_loop.run())
             self.loop_tasks.append(task8)
             logger.info("✅ Daily Trial Offer Loop started")

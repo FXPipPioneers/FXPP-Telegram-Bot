@@ -36,12 +36,11 @@ class DailyVIPTrialOfferLoop:
                                    LEFT JOIN vip_trial_activations vta ON fgj.user_id = vta.user_id
                                    WHERE vta.user_id IS NULL AND 
                                    (toh.user_id IS NULL OR toh.offered_at < NOW() - INTERVAL '24 hours')
-                                   -- vta.user_id IS NULL: Excludes anyone with trial record (active or expired)
-                                   -- toh.user_id IS NULL: Never offered before (send on day 1)
-                                   -- offered_at < 24 hours ago: Send again on day 3, 5, 7... (skip odd days)
                                 '''
                             )
                         
+                        for member_row in free_members:
+                            user_id = member_row['user_id']
                             try:
                                 # First check if user is in VIP group
                                 try:

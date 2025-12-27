@@ -181,11 +181,11 @@ class TradingBot(Client):
 
         # Callbacks
         @self.on_callback_query(filters.regex("^entry_"))
-        async def _entry_cb(client, cb):
+        async def _entry_cb(client, cb: CallbackQuery):
             await handle_entry_callback(self, client, cb)
 
         @self.on_callback_query(filters.regex("^ovr_"))
-        async def _ovr_cb(client, cb):
+        async def _ovr_cb(client, cb: CallbackQuery):
             await handle_override_callback(self, client, cb)
 
         @self.on_callback_query(filters.regex("^pricetest_"))
@@ -250,7 +250,11 @@ class TradingBot(Client):
                 await self.engine.stop()
             except Exception as e:
                 logging.error(f"Error stopping BackgroundEngine: {e}")
-        await self.stop()
+        try:
+            if self.is_connected:
+                await self.stop()
+        except Exception as e:
+            logging.error(f"Error stopping client: {e}")
 
 async def main():
     bot = TradingBot()

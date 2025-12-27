@@ -1,7 +1,7 @@
 import asyncio
 import logging
-from datetime import datetime
 import pytz
+from datetime import datetime
 from src.features.core.config import AMSTERDAM_TZ, PRICE_TRACKING_CONFIG
 
 logger = logging.getLogger(__name__)

@@ -21,7 +21,13 @@ TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "0"))
 FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID", "0"))
 VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
-DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID", "0"))
+# Use the direct value from environment variable for Peer ID compatibility
+_debug_id = os.getenv("DEBUG_GROUP_ID", "0")
+# Standardize DEBUG_GROUP_ID as a negative integer for Telegram channel/group IDs
+try:
+    DEBUG_GROUP_ID = int(_debug_id)
+except (ValueError, TypeError):
+    DEBUG_GROUP_ID = 0
 SIGNAL_SOURCE_GROUP_ID = safe_int(os.getenv("SIGNAL_SOURCE_GROUP_ID", "0"))
 
 # Links

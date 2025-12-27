@@ -17,6 +17,9 @@ async def dm_scheduler_task(bot_instance):
     while getattr(bot_instance, 'running', True):
         try:
             async with db.acquire() as conn:
+                # First check if the column exists (safety migration)
+                await conn.execute("ALTER TABLE dm_schedule ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
+                
                 pending = await conn.fetch(
                     "SELECT * FROM dm_schedule WHERE status = 'pending' AND scheduled_at <= $1",
                     datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
