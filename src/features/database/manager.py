@@ -16,8 +16,15 @@ from src.features.database.schema import SCHEMA
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    def __init__(self):
+    def __init__(self, bot_instance=None):
         self.pool = None
+        self.bot = bot_instance
+
+    async def log_to_debug(self, message: str, is_error: bool = False, user_id: int | None = None):
+        if self.bot:
+            await self.bot.log_to_debug(message, is_error, user_id)
+        else:
+            logger.info(f"DB Log (No bot): {message}")
 
     async def connect(self):
         db_url = os.environ.get("DATABASE_URL")

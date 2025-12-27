@@ -88,12 +88,12 @@ SCHEMA = {
     """,
     "dm_schedule": """
         CREATE TABLE IF NOT EXISTS dm_schedule (
-            member_id BIGINT PRIMARY KEY,
-            role_expired TIMESTAMP WITH TIME ZONE,
-            guild_id BIGINT,
-            dm_3_sent BOOLEAN DEFAULT FALSE,
-            dm_7_sent BOOLEAN DEFAULT FALSE,
-            dm_14_sent BOOLEAN DEFAULT FALSE
+            member_id BIGINT,
+            scheduled_at TIMESTAMP WITH TIME ZONE,
+            message_type TEXT,
+            status TEXT DEFAULT 'pending',
+            sent_at TIMESTAMP WITH TIME ZONE,
+            PRIMARY KEY (member_id, scheduled_at)
         );
     """,
     "bot_status": """

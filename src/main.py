@@ -78,6 +78,20 @@ class TradingBot(Client):
     async def is_owner(self, user_id: int) -> bool:
         return user_id == BOT_OWNER_USER_ID
 
+    def is_weekend_market_closed(self) -> bool:
+        """Check if market is closed (Friday 22:00 to Sunday 22:00 UTC)"""
+        now = datetime.now(pytz.UTC)
+        weekday = now.weekday()  # 0=Monday, 4=Friday, 5=Saturday, 6=Sunday
+        hour = now.hour
+
+        if weekday == 4: # Friday
+            return hour >= 22
+        if weekday in [5, 6]: # Saturday or Sunday
+            if weekday == 6: # Sunday
+                return hour < 22
+            return True
+        return False
+
     async def start_bot(self):
         # Start health check server
         await self.start_health_check()
@@ -85,6 +99,7 @@ class TradingBot(Client):
         await self.db.connect()
         self.db_pool = self.db.pool # Expose pool for tracker and engine
         # Initialize engine after DB connect
+        self.db.bot = self
         self.engine = CoreBackgroundEngine(self.db, self)
         
         # Register Handlers

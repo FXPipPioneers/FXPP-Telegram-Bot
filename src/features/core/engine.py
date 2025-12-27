@@ -46,7 +46,7 @@ class BackgroundEngine:
             logger.info("✅ Trial Expiry Loop started")
 
             # 4. Pre-expiration Warning Loop
-            warning_loop = PreexpirationWarningLoop(self.app, self.db.pool, self.app)
+            warning_loop = PreexpirationWarningLoop(self.app, self.app)
             task4 = asyncio.create_task(warning_loop.run())
             self.loop_tasks.append(task4)
             logger.info("✅ Pre-expiration Warning Loop started")
