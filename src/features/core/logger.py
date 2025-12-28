@@ -18,11 +18,20 @@ class DebugLogger:
 
     async def log_to_debug(self, message: str, is_error: bool = False, user_id: int | None = None):
         """Log message to debug group with professional formatting and standardized headers"""
+        from src.features.core.config import DEBUG_GROUP_ID
         if not DEBUG_GROUP_ID:
             logger.info(f"Debug logging skipped (no group ID): {message}")
             return
 
         try:
+            # Ensure DEBUG_GROUP_ID is a negative integer if possible
+            target_id = DEBUG_GROUP_ID
+            if isinstance(target_id, str):
+                try:
+                    target_id = int(target_id)
+                except:
+                    pass
+
             if not self.app.is_connected:
                 logger.warning("Bot client not connected. Skipping debug log.")
                 return
@@ -50,7 +59,7 @@ class DebugLogger:
                 keyboard = InlineKeyboardMarkup(buttons)
 
             await self.app.send_message(
-                DEBUG_GROUP_ID, 
+                target_id, 
                 msg_text, 
                 reply_markup=keyboard # type: ignore
             )

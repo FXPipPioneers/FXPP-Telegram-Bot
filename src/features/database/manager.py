@@ -21,7 +21,7 @@ class DatabaseManager:
         self.bot = bot_instance
 
     async def log_to_debug(self, message: str, is_error: bool = False, user_id: int | None = None):
-        if self.bot:
+        if hasattr(self, 'bot') and self.bot:
             await self.bot.log_to_debug(message, is_error, user_id)
         else:
             logger.info(f"DB Log (No bot): {message}")

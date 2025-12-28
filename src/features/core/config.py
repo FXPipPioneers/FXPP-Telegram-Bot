@@ -25,7 +25,10 @@ VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
 _debug_id = os.getenv("DEBUG_GROUP_ID", "0")
 # Standardize DEBUG_GROUP_ID as a negative integer for Telegram channel/group IDs
 try:
-    DEBUG_GROUP_ID = int(_debug_id)
+    if _debug_id.strip().startswith("-"):
+        DEBUG_GROUP_ID = int(_debug_id.strip())
+    else:
+        DEBUG_GROUP_ID = int(_debug_id.strip())
 except (ValueError, TypeError):
     DEBUG_GROUP_ID = 0
 SIGNAL_SOURCE_GROUP_ID = safe_int(os.getenv("SIGNAL_SOURCE_GROUP_ID", "0"))
