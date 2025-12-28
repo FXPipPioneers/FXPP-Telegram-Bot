@@ -37,6 +37,12 @@ class DebugLogger:
                     logger.error(f"Failed to connect bot client in logger: {e}")
                     return
 
+            # Resolve the chat peer if it's a channel/group ID to avoid CHAT_ID_INVALID
+            try:
+                await self.app.get_chat(target_id)
+            except Exception as e:
+                logger.warning(f"Could not resolve chat {target_id} before sending: {e}")
+
             header = "🚨 **SYSTEM ERROR**" if is_error else "📊 **SYSTEM LOG**"
             footer = f"\n\n{self.bot_owner_username}" if is_error else ""
             msg_text = f"{header}\n\n**Event:** {message}{footer}"

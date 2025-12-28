@@ -8,7 +8,6 @@ import pyrogram.utils as pyrogram_utils
 # Essential fix for "Peer id invalid" errors with channel IDs
 pyrogram_utils.MIN_CHANNEL_ID = -10099999999999
 pyrogram_utils.MIN_CHAT_ID = -9999999999999
-pyrogram_utils.MIN_USER_ID = -10099999999999
 
 load_dotenv()
 
@@ -19,17 +18,20 @@ def safe_int(value: str, default: int = 0) -> int:
         return default
 
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID", "0"))
-TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7963248882:AAHmX0zGvC7Qx2z0K7_vK7-J7vK7_vK7_vK") # Fallback for local dev
+TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID", "25546257"))
+TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "5f22e2a4413b56c4a6ca72a24c585f6e")
 
 # Standardized Group/Owner IDs
-BOT_OWNER_USER_ID = 1045239145
-FREE_GROUP_ID = -1002360811986
-VIP_GROUP_ID = -1002446702636
-DEBUG_GROUP_ID = -1003277177952
+BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "6664440870"))
+FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID", "-1002360811986"))
+VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "-1002446702636"))
+DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID", "-1003277177952"))
 
-SIGNAL_SOURCE_GROUP_ID = safe_int(os.getenv("SIGNAL_SOURCE_GROUP_ID", "0"))
+SIGNAL_SOURCE_GROUP_ID = safe_int(os.getenv("SIGNAL_SOURCE_GROUP_ID", "-1002360811986"))
+# Ensure bot owner ID is a set
+BOT_OWNER_IDS = {BOT_OWNER_USER_ID}
+
 
 # Links
 FREE_GROUP_LINK = os.getenv("FREE_GROUP_LINK", "")

@@ -202,6 +202,13 @@ class TradingBot(Client):
         """Register bot commands (called after client starts to avoid PEER_ID_INVALID)"""
         try:
             if BOT_OWNER_USER_ID:
+                # Try to resolve the owner peer first to ensure the bot "knows" them
+                try:
+                    await self.get_users(BOT_OWNER_USER_ID)
+                    logging.info(f"✅ Resolved owner peer {BOT_OWNER_USER_ID}")
+                except Exception as peer_error:
+                    logging.warning(f"⚠️ Could not resolve owner peer {BOT_OWNER_USER_ID}: {peer_error}")
+
                 owner_commands = [
                     BotCommand("entry", "Create trading signal"),
                     BotCommand("activetrades", "View active signals"),
@@ -235,7 +242,14 @@ class TradingBot(Client):
         
         # Start bot client FIRST to ensure it's connected
         logging.info("Starting bot client...")
-        await self.start()
+        try:
+            await self.start()
+        except Exception as e:
+            logging.error(f"❌ Critical error starting client: {e}")
+            # If token is missing, check environment variables
+            if "key is required" in str(e):
+                logging.error("TELEGRAM_BOT_TOKEN is missing or invalid in environment.")
+            raise e
         
         await self.db.connect()
         self.db_pool = self.db.pool
@@ -257,6 +271,15 @@ class TradingBot(Client):
         
     async def start_bot_complete(self):
         """Start all background tasks after bot initialization"""
+        # Resolve debug group peer on startup to prevent CHAT_ID_INVALID
+        from src.features.core.config import DEBUG_GROUP_ID
+        if DEBUG_GROUP_ID:
+            try:
+                await self.get_chat(int(DEBUG_GROUP_ID))
+                logging.info(f"✅ Successfully resolved debug group {DEBUG_GROUP_ID}")
+            except Exception as e:
+                logging.error(f"❌ Failed to resolve debug group {DEBUG_GROUP_ID}: {e}")
+
         # Start background tasks
         from src.features.community.scheduler import dm_scheduler_task
         asyncio.create_task(dm_scheduler_task(self))
