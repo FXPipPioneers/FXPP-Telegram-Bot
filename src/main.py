@@ -2,6 +2,8 @@ import logging
 import os
 import sys
 import asyncio
+from datetime import datetime
+import pytz
 
 # Ensure project root is in PYTHONPATH
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -170,26 +172,33 @@ class TradingBot(Client):
 
         # Set bot commands menu
         try:
-            if not self.is_connected:
-                await self.start()
-            
-            await self.set_bot_commands([
-                BotCommand("entry", "Create trading signal"),
-                BotCommand("activetrades", "View active signals"),
-                BotCommand("tradeoverride", "Manual trade status control"),
-                BotCommand("pricetest", "Test price fetching"),
-                BotCommand("dbstatus", "Database health check"),
-                BotCommand("dmstatus", "DM schedule status"),
-                BotCommand("freetrialusers", "Free trial management"),
-                BotCommand("sendwelcomedm", "Welcome DM management"),
-                BotCommand("newmemberslist", "New members tracking"),
-                BotCommand("dmmessages", "DM message management"),
-                BotCommand("peeridstatus", "Peer ID verification status"),
-                BotCommand("retracttrial", "Retract trial access"),
-                BotCommand("clearmember", "Clear member data")
-            ], scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
+            if BOT_OWNER_USER_ID:
+                owner_commands = [
+                    BotCommand("entry", "Create trading signal"),
+                    BotCommand("activetrades", "View active signals"),
+                    BotCommand("tradeoverride", "Manual trade status control"),
+                    BotCommand("pricetest", "Test price fetching"),
+                    BotCommand("dbstatus", "Database health check"),
+                    BotCommand("dmstatus", "DM schedule status"),
+                    BotCommand("freetrialusers", "Free trial management"),
+                    BotCommand("sendwelcomedm", "Welcome DM management"),
+                    BotCommand("newmemberslist", "New members tracking"),
+                    BotCommand("dmmessages", "DM message management"),
+                    BotCommand("peeridstatus", "Peer ID verification status"),
+                    BotCommand("retracttrial", "Retract trial access"),
+                    BotCommand("clearmember", "Clear member data")
+                ]
+                try:
+                    await self.set_bot_commands(
+                        owner_commands,
+                        scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
+                    logging.info(f"✅ Bot commands registered for user {BOT_OWNER_USER_ID} ({len(owner_commands)} commands)")
+                except Exception as scope_error:
+                    logging.error(f"❌ Error setting owner-scoped commands: {scope_error}")
+            else:
+                logging.warning("⚠️  BOT_OWNER_USER_ID not set, cannot register owner-specific commands")
         except Exception as e:
-            logging.error(f"Failed to set bot commands: {e}")
+            logging.error(f"❌ Error registering bot commands: {e}")
 
         # Callbacks
         @self.on_callback_query(filters.regex("^entry_"))
