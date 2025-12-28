@@ -21,16 +21,27 @@ TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "0"))
 FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID", "0"))
 VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
+
 # Use the direct value from environment variable for Peer ID compatibility
 _debug_id = os.getenv("DEBUG_GROUP_ID", "0")
-# Standardize DEBUG_GROUP_ID as a negative integer for Telegram channel/group IDs
+# Standardize DEBUG_GROUP_ID as an integer for Telegram channel/group IDs
 try:
-    if _debug_id.strip().startswith("-"):
-        DEBUG_GROUP_ID = int(_debug_id.strip())
+    _clean_id = _debug_id.strip()
+    if not _clean_id:
+        DEBUG_GROUP_ID = 0
+    elif _clean_id.startswith("-100"):
+        # Already has the correct channel prefix
+        DEBUG_GROUP_ID = int(_clean_id)
+    elif _clean_id.startswith("-"):
+        # It's a negative number, keep it as is
+        DEBUG_GROUP_ID = int(_clean_id)
     else:
-        DEBUG_GROUP_ID = int(_debug_id.strip())
+        # If it's a positive number but meant for a group, Telegram often needs it negative
+        # However, we'll try to parse it directly first as the user might have provided the full -100 ID
+        DEBUG_GROUP_ID = int(_clean_id)
 except (ValueError, TypeError):
     DEBUG_GROUP_ID = 0
+
 SIGNAL_SOURCE_GROUP_ID = safe_int(os.getenv("SIGNAL_SOURCE_GROUP_ID", "0"))
 
 # Links

@@ -19,6 +19,8 @@ class PriceTrackingLoop:
         
         while getattr(self.bot, 'running', True):
             try:
+                # Import here as well to be absolutely sure it's available in this scope
+                from datetime import datetime
                 # Record when this price check cycle started
                 PRICE_TRACKING_CONFIG['last_price_check_time'] = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 

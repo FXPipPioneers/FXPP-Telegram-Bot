@@ -24,53 +24,44 @@ class DebugLogger:
             return
 
         try:
-            # Ensure DEBUG_GROUP_ID is a negative integer if possible
-            target_id = DEBUG_GROUP_ID
-            if isinstance(target_id, str):
-                try:
-                    target_id = int(target_id)
-                except:
-                    pass
+            target_id = int(DEBUG_GROUP_ID)
 
             if not self.app.is_connected:
-                logger.warning("Bot client not connected. Skipping debug log.")
+                # If bot is not connected, we can't send but we can log locally
+                logger.info(f"Bot client not connected. Local Log: {message}")
                 return
 
-            if is_error:
-                header = "🚨 **SYSTEM ERROR**"
-                footer = f"\n\n{self.bot_owner_username}"
-            else:
-                header = "📊 **SYSTEM LOG**"
-                footer = ""
-
+            header = "🚨 **SYSTEM ERROR**" if is_error else "📊 **SYSTEM LOG**"
+            footer = f"\n\n{self.bot_owner_username}" if is_error else ""
             msg_text = f"{header}\n\n**Event:** {message}{footer}"
             
             keyboard: InlineKeyboardMarkup | None = None
             if user_id:
                 msg_text += f"\n\n👤 **User ID:** `{user_id}`"
-                # Deep link for user profile
                 buttons = [[InlineKeyboardButton("👤 View User Profile", url=f"tg://user?id={user_id}")]]
-                
                 if is_error:
-                    # Pre-filled error recovery message text for deep link
                     recovery_text = "Hello! I noticed an issue with your trial setup. Can you please message me so I can fix it for you?"
                     buttons.append([InlineKeyboardButton("💬 Open DM with User", url=f"tg://msg?to={user_id}&text={recovery_text}")])
-                
                 keyboard = InlineKeyboardMarkup(buttons)
 
-            await self.app.send_message(
-                target_id, 
-                msg_text, 
-                reply_markup=keyboard # type: ignore
-            )
-            # Also log to console for standard traceability
-            if is_error:
-                logger.error(message)
-            else:
-                logger.info(message)
+            # Use a short timeout for the message send to avoid hanging
+            try:
+                await asyncio.wait_for(
+                    self.app.send_message(
+                        target_id, 
+                        msg_text, 
+                        reply_markup=keyboard # type: ignore
+                    ),
+                    timeout=10
+                )
+                logger.info(f"Successfully sent debug log to {target_id}")
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout sending debug log to {target_id}")
+            except Exception as e:
+                logger.error(f"Telegram API Error sending to debug group {target_id}: {e}")
 
         except Exception as e:
-            logger.error(f"Failed to send debug log: {e}")
+            logger.error(f"Internal logger error: {e}")
 
     async def log_system_status(self, loop_name: str, status: str):
         """Standardized loop status logging for interval visibility"""

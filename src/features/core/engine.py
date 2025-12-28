@@ -93,9 +93,17 @@ class BackgroundEngine:
     async def _send_startup_notification(self):
         """Helper to send startup notification once bot is connected"""
         try:
-            await asyncio.sleep(5) # Wait for connection to stabilize
+            # Wait a bit for connection and session to be fully ready
+            for _ in range(10):
+                if hasattr(self.app, 'is_connected') and self.app.is_connected:
+                    break
+                await asyncio.sleep(1)
+                
             if hasattr(self.app, 'log_to_debug'):
                 await self.app.log_to_debug("🚀 **Trading Bot Initialized** - All systems operational.")
+                logger.info("Sent startup notification to debug group.")
+            else:
+                logger.error("Bot instance has no log_to_debug method.")
         except Exception as e:
             logger.error(f"Startup notification failed: {e}")
 

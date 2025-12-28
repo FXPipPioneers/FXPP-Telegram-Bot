@@ -76,6 +76,14 @@ class DatabaseManager:
                         await conn.execute("ALTER TABLE trial_offer_history RENAME COLUMN offer_sent_date TO offered_at")
                 except Exception as e:
                     logger.error(f"Migration error: {e}")
+
+                # Fresh Start Reset (Per User Request)
+                # This clears trial and peer ID tracking tables for a fresh start on Monday
+                try:
+                    await conn.execute("TRUNCATE TABLE vip_trial_activations, peer_id_checks, active_members, role_history, dm_schedule, trial_offer_history, free_group_joins, emoji_reactions, pending_welcome_dms CASCADE")
+                    logger.info("Fresh Start: Database tables cleared successfully for fresh start.")
+                except Exception as e:
+                    logger.error(f"Fresh Start Reset failed: {e}")
                 
             logger.info("Database connected and full schema verified.")
         except Exception as e:
