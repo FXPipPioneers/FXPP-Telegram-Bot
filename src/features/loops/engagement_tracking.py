@@ -20,7 +20,6 @@ class EngagementTrackingLoop:
             message = MESSAGE_TEMPLATES["Engagement & Offers"]["Engagement Discount (50% Off)"]["message"]
             await self.app.send_message(user_id, message)
             logger.info(f"✅ Sent engagement discount DM to user {user_id}")
-            await self.bot.log_to_debug(f"✅ Sent engagement discount DM to user {user_id}", user_id=user_id)
         except Exception as e:
             error_msg = f"❌ Could not send engagement discount DM to {user_id}: {e}"
             logger.error(error_msg)

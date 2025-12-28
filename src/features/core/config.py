@@ -11,26 +11,27 @@ pyrogram_utils.MIN_CHAT_ID = -9999999999999
 
 load_dotenv()
 
-def safe_int(value: str, default: int = 0) -> int:
+def safe_int(value, default=0):
     try:
         return int(value) if value else default
     except (ValueError, TypeError):
         return default
 
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7963248882:AAHmX0zGvC7Qx2z0K7_vK7-J7vK7_vK7_vK") # Fallback for local dev
-TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID", "25546257"))
-TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "5f22e2a4413b56c4a6ca72a24c585f6e")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID"))
+TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
 
 # Standardized Group/Owner IDs
-BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "6664440870"))
-FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID", "-1002360811986"))
-VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "-1002446702636"))
-DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID", "-1003277177952"))
+# Hardcoded fallbacks for debugging as per user request
+BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID")) or 6664440870
+FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID"))
+VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID"))
+DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID"))
 
 SIGNAL_SOURCE_GROUP_ID = safe_int(os.getenv("SIGNAL_SOURCE_GROUP_ID", "-1002360811986"))
 # Ensure bot owner ID is a set
-BOT_OWNER_IDS = {BOT_OWNER_USER_ID}
+BOT_OWNER_IDS = {BOT_OWNER_USER_ID} if BOT_OWNER_USER_ID else set()
 
 
 # Links
@@ -46,7 +47,8 @@ PENDING_ENTRIES = {}
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 
 # Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Hardcoded fallbacks for debugging as per user request
+DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://fxpp_telegram_bot_database_user:xYWX9zSGR4M27Dq8eNmQYD9AVHjsxmfQ@dpg-d51ecr6mcj7s73epdtdg-a.oregon-postgres.render.com/fxpp_telegram_bot_database"
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -125,6 +127,54 @@ MESSAGE_TEMPLATES = {
         "Trial Expired": {
             "id": "trial_expired",
             "message": "Hey! Your **3-day free access** to the VIP Group has unfortunately **ran out**. We truly hope you were able to benefit with us & we hope to see you back soon! For now, feel free to continue following our trade signals in our Free Group: https://t.me/fxpippioneers\n\n**Want to rejoin the VIP Group? You can regain access through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+        },
+        "Trial Rejected (Used Before)": {
+            "id": "trial_rejected",
+            "message": "Hey! Unfortunately, our free trial can only be used once per person. Your trial has already ran out, so we can't give you another.\n\nWe truly hope that you were able to profit with us during your free trial. If you were happy with the results you got, then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
+        }
+    },
+    "Free Trial Heads Up": {
+        "24-Hour Warning": {
+            "id": "ft_24hr",
+            "message": "⏰ **REMINDER! Your 3-day free trial for our VIP Group will expire in 24 hours**.\n\nAfter that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
+        },
+        "3-Hour Warning": {
+            "id": "ft_3hr",
+            "message": "⏰ **FINAL REMINDER! Your 3-day free trial for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and get permanent access to our VIP Group.\n\n**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
+        }
+    },
+    "3/7/14 Day Follow-ups": {
+        "3 Days After Trial Ends": {
+            "id": "fu_3day",
+            "message": "Hey! It's been 3 days since your **3-day free access to the VIP Group** ended. We truly hope you got value from the **20+ trading signals** you received during that time.\n\nAs you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\nWe'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+        },
+        "7 Days After Trial Ends": {
+            "id": "fu_7day",
+            "message": "It's been a week since your VIP Group trial ended. Since then, our **VIP members have been catching trade setups daily in the VIP Group**.\n\nIf you found value in just 3 days, imagine what results you could've been seeing by now with full access. It's all about **consistency and staying connected to the right information**.\n\nWe'd like to **personally invite you to rejoin the VIP Group** and get back into the rhythm.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+        },
+        "14 Days After Trial Ends": {
+            "id": "fu_14day",
+            "message": "Hey! It's been two weeks since your free access to the VIP Group ended. We hope you've stayed active since then.\n\nIf you've been trading solo or passively following the free channel, you might be feeling the difference. In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. That edge can make all the difference over time.\n\nWe'd love to **invite you back into the VIP Group** and help you start compounding results again.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+        }
+    },
+    "Welcome & Onboarding": {
+        "Welcome DM (New Free Group Member)": {
+            "id": "welcome_free",
+            "message": "**Hey, Welcome to FX Pip Pioneers!**\n\n**Want to try our VIP Group for FREE?**\nWe're offering a **3-day free trial** of our VIP Group where you'll receive **6+ high-quality trade signals per day**.\n\n**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\nGood luck trading!"
+        },
+        "Monday Activation (Weekend Delay)": {
+            "id": "monday_activation",
+            "message": "Hey! The weekend is over, so the trading markets have been opened again. That means your 3-day welcome gift has officially started. You now have full access to the VIP Group. Let's make the most of it by securing some wins together!"
+        }
+    },
+    "Engagement & Offers": {
+        "Engagement Discount (50% Off)": {
+            "id": "engagement_discount",
+            "message": "Hey! 👋 We noticed that you've been engaging with our signals in the Free Group. We want to say that we truly appreciate it!\n\nAs a thank you for your loyalty and engagement, we want to give you something special: **exclusive 50% discount for access to our VIP Group.**\n\nHere's what you'll unlock:\n• **36+ expert signals per week** (vs 6 per week in the free group)\n• **6+ trade signals PER DAY** from our professional trading team\n• Real-time price tracking and risk management\n\n**Your exclusive discount code is:** `Thank_You!50!`\n\n**You can upgrade to VIP and apply your discount code here:** https://whop.com/gold-pioneer/gold-pioneer/"
+        },
+        "Daily VIP Trial Offer": {
+            "id": "daily_trial_offer",
+            "message": "Want to try our VIP Group for FREE?\n\nWe're offering a 3-day free trial of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\nYour free trial will automatically be activated once you join our VIP group through this link: https://t.me/+5X18tTjgM042ODU0"
         }
     }
 }

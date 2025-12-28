@@ -74,15 +74,33 @@ async def handle_cleartrial_callback(client: Client, callback_query: CallbackQue
         user_mapping = bot_instance.cleartrial_mappings.get(menu_id, {})
         selected_user_id_str = user_mapping.get(idx)
         if selected_user_id_str:
-            AUTO_ROLE_CONFIG['active_members'].pop(selected_user_id_str, None)
-            AUTO_ROLE_CONFIG['role_history'].pop(selected_user_id_str, None)
-            if bot_instance.db_pool:
-                try:
-                    async with bot_instance.db_pool.acquire() as conn:
-                        await conn.execute("DELETE FROM active_members WHERE member_id = $1", int(selected_user_id_str))
-                        await conn.execute("DELETE FROM role_history WHERE member_id = $1", int(selected_user_id_str))
-                except Exception as e:
-                    logger.error(f"Database error in clear member: {e}")
-            await callback_query.message.edit_text(f"✅ User {selected_user_id_str} cleared.")
+            await execute_clear_member(client, callback_query.message, selected_user_id_str, bot_instance)
         await callback_query.answer()
         return
+
+async def execute_clear_member(client: Client, message: Message, target_user_id: str, bot_instance):
+    """Execute the actual member clearing logic"""
+    try:
+        user_id_int = int(target_user_id)
+        
+        # 1. Clear from in-memory config if present
+        if user_id_int in AUTO_ROLE_CONFIG.get('active_members', {}):
+            AUTO_ROLE_CONFIG['active_members'].pop(user_id_int, None)
+        
+        # 2. Clear from database
+        if bot_instance.db_pool:
+            async with bot_instance.db_pool.acquire() as conn:
+                # Delete from active_members
+                await conn.execute("DELETE FROM active_members WHERE member_id = $1", user_id_int)
+                # Delete from role_history
+                await conn.execute("DELETE FROM role_history WHERE member_id = $1", user_id_int)
+                # Delete from pending_welcome_dms
+                await conn.execute("DELETE FROM pending_welcome_dms WHERE user_id = $1", user_id_int)
+                # Delete from engagement_tracking
+                await conn.execute("DELETE FROM engagement_tracking WHERE user_id = $1", user_id_int)
+        
+        await message.edit_text(f"✅ **Member {target_user_id} Cleared**\n\nAll trial history, active status, and tracking data has been removed.")
+        await bot_instance.log_to_debug(f"Owner cleared member {target_user_id} data.", user_id=user_id_int)
+    except Exception as e:
+        logger.error(f"Error clearing member {target_user_id}: {e}")
+        await message.edit_text(f"❌ **Error Clearing Member**\n\n{str(e)}")

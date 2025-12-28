@@ -41,7 +41,10 @@ class DebugLogger:
             try:
                 await self.app.get_chat(target_id)
             except Exception as e:
-                logger.warning(f"Could not resolve chat {target_id} before sending: {e}")
+                if "CHAT_ID_INVALID" in str(e):
+                    logger.debug(f"Could not resolve chat {target_id} (bot might not be in the group yet)")
+                else:
+                    logger.warning(f"Could not resolve chat {target_id} before sending: {e}")
 
             header = "🚨 **SYSTEM ERROR**" if is_error else "📊 **SYSTEM LOG**"
             footer = f"\n\n{self.bot_owner_username}" if is_error else ""
@@ -70,7 +73,8 @@ class DebugLogger:
             except asyncio.TimeoutError:
                 logger.error(f"Timeout sending debug log to {target_id}")
             except Exception as e:
-                logger.error(f"Telegram API Error sending to debug group {target_id}: {e}")
+                if "CHAT_ID_INVALID" not in str(e):
+                    logger.error(f"Telegram API Error sending to debug group {target_id}: {e}")
 
         except Exception as e:
             logger.error(f"Internal logger error: {e}")

@@ -154,8 +154,9 @@ class TradingEngine:
 
     def calculate_tp_sl_levels(self, entry: float, pair: str, action: str) -> Dict[str, float]:
         """Calculate TP/SL levels based on fixed pip values"""
-        if pair.upper() in PAIR_CONFIG:
-            pip_value = PAIR_CONFIG[pair.upper()]['pip_value']
+        pair = pair.upper()
+        if pair in PAIR_CONFIG:
+            pip_value = PAIR_CONFIG[pair]['pip_value']
         else:
             pip_value = 0.0001
         

@@ -130,11 +130,10 @@ class PeerIDEscalationLoop:
                                 delay_mins = row['current_delay_minutes']
                                 interval_mins = row['current_interval_minutes']
                                 
-                                # Log failure at each interval
-                                await self.bot.log_to_debug(
-                                    f"⏳ Peer ID check failed for user {user_id} (Joined {time_elapsed:.1f}h ago). "
-                                    f"Next check in {interval_mins}m.",
-                                    user_id=user_id
+                                # Log failure at each interval (internal only, don't spam Telegram)
+                                logger.info(
+                                    f"Peer ID check failed for user {user_id} (Joined {time_elapsed:.1f}h ago). "
+                                    f"Next check in {interval_mins}m."
                                 )
                                 
                                 # Calculate time since join

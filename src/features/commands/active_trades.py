@@ -1,6 +1,6 @@
 import logging
 from pyrogram.client import Client
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from src.features.core.config import PRICE_TRACKING_CONFIG
 from datetime import datetime
 import pytz
@@ -11,31 +11,24 @@ AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 async def handle_active_trades(bot_instance, client: Client, message: Message):
     if not await bot_instance.is_owner(message.from_user.id):
         return
+    await show_active_trades_list(bot_instance, message)
 
-    # Parse subcommand from message text
-    text_parts = message.text.split()
-    subcommand = text_parts[1].lower() if len(text_parts) > 1 else None
-    
-    if subcommand == "list":
-        await bot_instance.show_active_trades_list(message)
-    elif subcommand == "position" and len(text_parts) > 2 and text_parts[2].lower() == "guide":
-        await bot_instance.show_position_guide(message)
-    else:
-        # Show help message with subcommand options
-        help_text = ("**Active Trades Command**\n\n"
-                    "Usage:\n"
-                    "• `/activetrades list` - Show list of active trades with prices\n"
-                    "• `/activetrades position guide` - Show what each color/emoji means")
-        await message.reply(help_text)
-
-async def show_active_trades_list(bot_instance, message: Message):
+async def show_active_trades_list(bot_instance, message: Message, is_edit=False):
     """Display list of active trades with current prices and positions"""
     trades = PRICE_TRACKING_CONFIG['active_trades']
 
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Refresh", callback_data="at_refresh_list")],
+        [InlineKeyboardButton("📖 Position Guide", callback_data="at_view_guide")],
+        [InlineKeyboardButton("❌ Close", callback_data="at_close")]
+    ])
+
     if not trades:
-        await message.reply(
-            "**No Active Trades**\n\nThere are currently no active trading signals being tracked."
-        )
+        text = "**No Active Trades**\n\nThere are currently no active trading signals being tracked."
+        if is_edit:
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await message.reply(text, reply_markup=keyboard)
         return
 
     # Calculate remaining time until next refresh
@@ -73,27 +66,38 @@ async def show_active_trades_list(bot_instance, message: Message):
         response += f"**{pair}** - {action} | {price_line} | {position_text}\n"
 
     if len(trades) > 10:
-        response += f"_...and {len(trades) - 10} more trades_"
+        response += f"\n_...and {len(trades) - 10} more trades_"
 
-    await message.reply(response)
+    if is_edit:
+        await message.edit_text(response, reply_markup=keyboard)
+    else:
+        await message.reply(response, reply_markup=keyboard)
 
-async def show_position_guide(bot_instance, message: Message):
+async def show_position_guide(bot_instance, message: Message, is_edit=False):
     """Display the position guide explaining all colors and their meanings"""
     guide = ("**Position Guide - Trade Status Indicators**\n\n"
             "🔴 = **At/Beyond SL**\n"
-            "   Price is at or has crossed the stop loss level (trade should be closed)\n\n"
+            "   Price is at or has crossed the stop loss level\n\n"
             "🟡 = **At/Near Entry**\n"
-            "   Price is at or very close to the entry point\n\n"
+            "   Price is at or very close to entry\n\n"
             "🟠 = **Between Entry & TP1**\n"
-            "   Price is in profit but hasn't reached the first take profit level yet\n\n"
+            "   Price is in profit but hasn't reached TP1\n\n"
             "🟢 = **Between TP1 & TP2**\n"
-            "   Price has passed TP1 and is now targeting TP2\n\n"
+            "   Price has passed TP1 and targeting TP2\n\n"
             "💚 = **Between TP2 & TP3**\n"
-            "   Price has passed TP2 (breakeven is now active) and is targeting TP3\n\n"
+            "   Price has passed TP2 (breakeven active) and targeting TP3\n\n"
             "🚀 = **Max Profit (Beyond TP3)**\n"
-            "   Price has exceeded all take profit levels - maximum profit achieved!")
+            "   Price has exceeded all take profit levels!")
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Back to List", callback_data="at_view_list")],
+        [InlineKeyboardButton("❌ Close", callback_data="at_close")]
+    ])
     
-    await message.reply(guide)
+    if is_edit:
+        await message.edit_text(guide, reply_markup=keyboard)
+    else:
+        await message.reply(guide, reply_markup=keyboard)
 
 def analyze_trade_position(action: str, entry: float, tp1: float,
                            tp2: float, tp3: float, sl: float,
@@ -112,25 +116,29 @@ def analyze_trade_position(action: str, entry: float, tp1: float,
         else:
             return {"emoji": "🚀", "position": "Above TP3 - Max Profit"}
     else:
+        # SELL logic
         if current_price >= sl:
             return {"emoji": "🔴", "position": "At/Above SL"}
         elif current_price >= entry:
             return {"emoji": "🟡", "position": "Above Entry"}
-        elif current_price >= tp1:
+        elif current_price >= tp1: # SELL: TP1 is lower than entry
             return {"emoji": "🟠", "position": "Between Entry and TP1"}
-        elif current_price <= tp2: # Corrected comparison for SELL
+        elif current_price >= tp2: # SELL: TP2 is lower than TP1
             return {"emoji": "🟢", "position": "Between TP1 and TP2"}
-        elif current_price <= tp3: # Corrected comparison for SELL
+        elif current_price >= tp3:
             return {"emoji": "💚", "position": "Between TP2 and TP3"}
         else:
             return {"emoji": "🚀", "position": "Below TP3 - Max Profit"}
 
-async def handle_activetrades_callback(bot_instance, client: Client, callback_query):
-    """Handle activetrades list navigation callbacks"""
+async def handle_activetrades_callback(bot_instance, client: Client, callback_query: CallbackQuery):
+    """Handle activetrades widget navigation callbacks"""
     data = callback_query.data
-    if data == "at_refresh":
-        await handle_active_trades(bot_instance, client, callback_query.message)
-        await callback_query.answer("Refreshed")
+    
+    if data == "at_refresh_list" or data == "at_view_list":
+        await show_active_trades_list(bot_instance, callback_query.message, is_edit=True)
+    elif data == "at_view_guide":
+        await show_position_guide(bot_instance, callback_query.message, is_edit=True)
     elif data == "at_close":
-        await callback_query.message.edit_text("❌ Closed.")
-        await callback_query.answer()
+        await callback_query.message.delete()
+    
+    await callback_query.answer()

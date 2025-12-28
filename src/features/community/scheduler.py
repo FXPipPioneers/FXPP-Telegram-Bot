@@ -9,14 +9,14 @@ logger = logging.getLogger(__name__)
 async def dm_scheduler_task(bot_instance):
     """Background task to process pending DMs (from telegram_bot.py:5800)"""
     client = bot_instance
-    db = getattr(bot_instance, 'db_pool', None) or getattr(bot_instance, 'db', None)
-    if not db:
+    db_pool = getattr(bot_instance, 'db_pool', None)
+    if not db_pool:
         logger.error("DM Scheduler: No database pool found")
         return
         
     while getattr(bot_instance, 'running', True):
         try:
-            async with db.acquire() as conn:
+            async with db_pool.acquire() as conn:
                 # Safety migrations
                 await conn.execute("ALTER TABLE dm_schedule ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
                 await conn.execute("ALTER TABLE dm_schedule ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ")
@@ -34,7 +34,7 @@ async def dm_scheduler_task(bot_instance):
                 
                 try:
                     await client.send_message(user_id, content)
-                    async with db.acquire() as conn:
+                    async with db_pool.acquire() as conn:
                         await conn.execute(
                             "UPDATE dm_schedule SET status = 'sent', sent_at = $1 WHERE member_id = $2 AND scheduled_at = $3",
                             datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ), user_id, dm['scheduled_at']

@@ -20,7 +20,12 @@ async def handle_dmmessages(client: Client, message: Message, is_owner_func):
     ])
 
     await message.reply(
-        "**DM Message Templates**\n\nSelect a topic to preview the DM messages:",
+        "**DM Message Templates**\n\n"
+        "Select a topic to preview the DM messages:\n\n"
+        "📢 **Free Trial Heads Up** - Trial expiration warnings (24hr, 3hr)\n"
+        "📅 **3/7/14 Day Follow-ups** - Post-trial follow-up messages\n"
+        "👋 **Welcome & Onboarding** - Welcome and activation messages\n"
+        "🎁 **Engagement & Offers** - Discount and trial offer messages",
         reply_markup=keyboard
     )
 
@@ -66,5 +71,6 @@ async def handle_dmmessages_callback(client: Client, callback_query: CallbackQue
                     buttons = [[InlineKeyboardButton("🔙 Back", callback_data="dmm_back")]]
                     await callback_query.message.edit_text(f"**Preview: {msg_title}**\n\n{msg_data['message']}", reply_markup=InlineKeyboardMarkup(buttons))
                     await callback_query.answer()
+                    logger.info(f"Owner previewed DM message: {msg_title}")
                     return
     await callback_query.answer()

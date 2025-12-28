@@ -23,7 +23,7 @@ class PriceTrackingLoop:
                 # Record when this price check cycle started
                 PRICE_TRACKING_CONFIG['last_price_check_time'] = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
-                await self.bot.log_to_debug("🔄 **Price Tracking Loop**: Checking active trades...")
+                logger.info("Price Tracking Loop: Checking active trades...")
                 
                 if self.bot.is_weekend_market_closed():
                     await asyncio.sleep(PRICE_TRACKING_CONFIG['check_interval'])

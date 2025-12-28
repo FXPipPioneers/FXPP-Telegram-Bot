@@ -27,8 +27,10 @@ class DatabaseManager:
             logger.info(f"DB Log (No bot): {message}")
 
     async def connect(self):
-        db_url = os.environ.get("DATABASE_URL")
+        # Prefer DATABASE_URL from config (handles environment and fallbacks)
+        db_url = DATABASE_URL
         
+        # Fallback to individual components
         if not db_url:
             user = os.environ.get("PGUSER")
             password = os.environ.get("PGPASSWORD")
@@ -39,11 +41,12 @@ class DatabaseManager:
             if all([user, password, host, port, database]):
                 db_url = f"postgresql://{user}:{password}@{host}:{port}/{database}"
         
+        # Last resort fallback (local)
         if not db_url:
-            logger.error("DATABASE_URL is missing. Please ensure database is integrated.")
+            logger.error("DATABASE_URL and PG components are missing.")
             db_url = "postgresql://localhost:5432/postgres"
 
-        if db_url.startswith("postgres://"):
+        if db_url and db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
 
         logger.info(f"Connecting to database...")

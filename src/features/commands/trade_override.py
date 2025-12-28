@@ -237,65 +237,91 @@ async def handle_override_callback(bot_instance, client: Client, callback_query:
             try:
                 if action_type == 'slhit':
                     trade['status'] = 'closed (sl hit - manual override)'
-                    await bot_instance.remove_trade_from_db(full_msg_id, 'manual_sl_hit')
-                    await bot_instance.send_sl_notification(full_msg_id, trade, trade.get('sl_price', 0))
+                    PRICE_TRACKING_CONFIG['active_trades'].pop(full_msg_id, None)
+                    if hasattr(bot_instance.db, 'remove_active_trade'):
+                        await bot_instance.db.remove_active_trade(full_msg_id)
+                    from src.features.trading.handlers import send_sl_notification
+                    await send_sl_notification(client, full_msg_id, trade, trade.get('sl_price', 0), bot_instance)
                     successful_trades.append(f"{pair} {action}{group_label} - SL Hit")
 
                 elif action_type == 'tp1hit':
                     if 'TP1' not in trade.get('tp_hits', []):
                         trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
                     trade['status'] = 'active (tp1 hit - manual override)'
-                    await bot_instance.update_trade_in_db(full_msg_id, trade)
-                    await bot_instance.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
+                    PRICE_TRACKING_CONFIG['active_trades'][full_msg_id] = trade
+                    if hasattr(bot_instance.db, 'save_active_trade'):
+                        await bot_instance.db.save_active_trade(trade)
+                    from src.features.trading.handlers import send_tp_notification
+                    await send_tp_notification(client, full_msg_id, trade, 'TP1', trade.get('tp1_price', 0), bot_instance)
                     successful_trades.append(f"{pair} {action}{group_label} - TP1 Hit")
 
                 elif action_type == 'tp2hit':
                     current_tp_hits = trade.get('tp_hits', [])
                     if 'TP1' not in current_tp_hits:
                         trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
-                        await bot_instance.update_trade_in_db(full_msg_id, trade)
-                        await bot_instance.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
+                        PRICE_TRACKING_CONFIG['active_trades'][full_msg_id] = trade
+                        if hasattr(bot_instance.db, 'save_active_trade'):
+                            await bot_instance.db.save_active_trade(trade)
+                        from src.features.trading.handlers import send_tp_notification
+                        await send_tp_notification(client, full_msg_id, trade, 'TP1', trade.get('tp1_price', 0), bot_instance)
                         await asyncio.sleep(1)
                     
                     if 'TP2' not in trade.get('tp_hits', []):
                         trade['tp_hits'] = trade.get('tp_hits', []) + ['TP2']
                     trade['breakeven_active'] = True
                     trade['status'] = 'active (tp2 hit - manual override - breakeven active)'
-                    await bot_instance.update_trade_in_db(full_msg_id, trade)
-                    await bot_instance.send_tp_notification(full_msg_id, trade, 'TP2', trade.get('tp2_price', 0))
+                    PRICE_TRACKING_CONFIG['active_trades'][full_msg_id] = trade
+                    if hasattr(bot_instance.db, 'save_active_trade'):
+                        await bot_instance.db.save_active_trade(trade)
+                    from src.features.trading.handlers import send_tp_notification
+                    await send_tp_notification(client, full_msg_id, trade, 'TP2', trade.get('tp2_price', 0), bot_instance)
                     successful_trades.append(f"{pair} {action}{group_label} - TP2 Hit")
 
                 elif action_type == 'tp3hit':
                     current_tp_hits = trade.get('tp_hits', [])
                     if 'TP1' not in current_tp_hits:
                         trade['tp_hits'] = trade.get('tp_hits', []) + ['TP1']
-                        await bot_instance.update_trade_in_db(full_msg_id, trade)
-                        await bot_instance.send_tp_notification(full_msg_id, trade, 'TP1', trade.get('tp1_price', 0))
+                        PRICE_TRACKING_CONFIG['active_trades'][full_msg_id] = trade
+                        if hasattr(bot_instance.db, 'save_active_trade'):
+                            await bot_instance.db.save_active_trade(trade)
+                        from src.features.trading.handlers import send_tp_notification
+                        await send_tp_notification(client, full_msg_id, trade, 'TP1', trade.get('tp1_price', 0), bot_instance)
                         await asyncio.sleep(1)
                     
                     if 'TP2' not in current_tp_hits:
                         trade['tp_hits'] = trade.get('tp_hits', []) + ['TP2']
                         trade['breakeven_active'] = True
-                        await bot_instance.update_trade_in_db(full_msg_id, trade)
-                        await bot_instance.send_tp_notification(full_msg_id, trade, 'TP2', trade.get('tp2_price', 0))
+                        PRICE_TRACKING_CONFIG['active_trades'][full_msg_id] = trade
+                        if hasattr(bot_instance.db, 'save_active_trade'):
+                            await bot_instance.db.save_active_trade(trade)
+                        from src.features.trading.handlers import send_tp_notification
+                        await send_tp_notification(client, full_msg_id, trade, 'TP2', trade.get('tp2_price', 0), bot_instance)
                         await asyncio.sleep(1)
                     
                     if 'TP3' not in trade.get('tp_hits', []):
                         trade['tp_hits'] = trade.get('tp_hits', []) + ['TP3']
                     trade['status'] = 'completed (tp3 hit - manual override)'
-                    await bot_instance.remove_trade_from_db(full_msg_id, 'manual_tp3_hit')
-                    await bot_instance.send_tp_notification(full_msg_id, trade, 'TP3', trade.get('tp3_price', 0))
+                    PRICE_TRACKING_CONFIG['active_trades'].pop(full_msg_id, None)
+                    if hasattr(bot_instance.db, 'remove_active_trade'):
+                        await bot_instance.db.remove_active_trade(full_msg_id)
+                    from src.features.trading.handlers import send_tp_notification
+                    await send_tp_notification(client, full_msg_id, trade, 'TP3', trade.get('tp3_price', 0), bot_instance)
                     successful_trades.append(f"{pair} {action}{group_label} - TP3 Hit")
 
                 elif action_type == 'behit':
                     trade['status'] = 'closed (breakeven after tp2 - manual override)'
-                    await bot_instance.remove_trade_from_db(full_msg_id, 'manual_breakeven_hit')
-                    await bot_instance.send_breakeven_notification(full_msg_id, trade)
+                    PRICE_TRACKING_CONFIG['active_trades'].pop(full_msg_id, None)
+                    if hasattr(bot_instance.db, 'remove_active_trade'):
+                        await bot_instance.db.remove_active_trade(full_msg_id)
+                    from src.features.trading.handlers import send_breakeven_notification
+                    await send_breakeven_notification(client, full_msg_id, trade, bot_instance)
                     successful_trades.append(f"{pair} {action}{group_label} - Breakeven After TP2")
 
                 elif action_type == 'endhit':
                     trade['status'] = 'closed (ended by manual override)'
-                    await bot_instance.remove_trade_from_db(full_msg_id, 'manual_end_tracking')
+                    PRICE_TRACKING_CONFIG['active_trades'].pop(full_msg_id, None)
+                    if hasattr(bot_instance.db, 'remove_active_trade'):
+                        await bot_instance.db.remove_active_trade(full_msg_id)
                     successful_trades.append(f"{pair} {action}{group_label} - Tracking Ended")
 
             except Exception as e:

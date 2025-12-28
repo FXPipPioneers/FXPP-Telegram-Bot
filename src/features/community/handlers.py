@@ -5,7 +5,7 @@ from pyrogram.enums import ChatMemberStatus
 from src.features.core.config import (
     VIP_GROUP_ID, FREE_GROUP_ID, DEBUG_GROUP_ID, BOT_OWNER_USER_ID,
     MESSAGE_TEMPLATES, PAIR_CONFIG, EXCLUDED_FROM_TRACKING, AUTO_ROLE_CONFIG,
-    PRICE_TRACKING_CONFIG, AMSTERDAM_TZ
+    PRICE_TRACKING_CONFIG, AMSTERDAM_TZ, PENDING_ENTRIES
 )
 import logging
 from datetime import datetime, timedelta
@@ -164,9 +164,57 @@ class CommunityHandlers:
     async def handle_text_input(self, client: Client, message: Message):
         if not message.from_user:
             return
-        if not await self.is_owner(message.from_user.id):
+        user_id = message.from_user.id
+        if not await self.is_owner(user_id):
             return
-        await self.bot.handle_text_input(client, message)
+
+        # Entry Command: Custom Pair Input
+        if user_id in self.bot.awaiting_custom_pair:
+            pair = message.text.strip().upper()
+            from src.features.core.config import PENDING_ENTRIES, EXCLUDED_FROM_TRACKING
+            entry_data = PENDING_ENTRIES.get(user_id)
+            if entry_data:
+                entry_data['pair'] = pair
+                # Auto-disable tracking for excluded pairs
+                if pair in EXCLUDED_FROM_TRACKING:
+                    entry_data['track_price'] = False
+                
+                if entry_data['entry_type'] == 'limit':
+                    self.bot.awaiting_price_input[user_id] = True
+                    await message.reply(f"**Step 3b: Limit Order Price**\nEnter the entry price for **{pair}**:")
+                else:
+                    from src.features.commands.entry import show_group_selection
+                    # Mocking a callback query object for show_group_selection
+                    class MockCallback:
+                        def __init__(self, msg): self.message = msg
+                        async def edit_text(self, text, reply_markup=None, *args, **kwargs): 
+                            return await self.message.reply(text, reply_markup=reply_markup)
+                    await show_group_selection(self.bot, MockCallback(message), entry_data)
+            self.bot.awaiting_custom_pair.pop(user_id, None)
+            return
+
+        # Entry Command: Price Input
+        if user_id in self.bot.awaiting_price_input:
+            try:
+                price = float(message.text.strip())
+                from src.features.core.config import PENDING_ENTRIES
+                entry_data = PENDING_ENTRIES.get(user_id)
+                if entry_data:
+                    entry_data['price'] = price
+                    from src.features.commands.entry import show_group_selection
+                    await message.reply(f"✅ Price **{price}** set. Proceeding to group selection...")
+                    class MockCallback:
+                        def __init__(self, msg): self.message = msg
+                        async def edit_text(self, text, reply_markup=None, *args, **kwargs): 
+                            return await self.message.reply(text, reply_markup=reply_markup)
+                    await show_group_selection(self.bot, MockCallback(message), entry_data)
+                self.bot.awaiting_price_input.pop(user_id, None)
+            except ValueError:
+                await message.reply("❌ Invalid price. Please enter a number.")
+            return
+
+        # Original legacy handle_text_input call if any (but we've ported the main parts now)
+        # await self.bot.handle_text_input(client, message)
     
     async def delete_service_messages(self, client: Client, message: Message):
         if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
