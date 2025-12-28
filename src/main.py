@@ -96,6 +96,10 @@ class TradingBot(Client):
         # Start health check server
         await self.start_health_check()
         
+        # Start bot client FIRST to ensure it's connected
+        logging.info("Starting bot client...")
+        await self.start()
+        
         await self.db.connect()
         self.db_pool = self.db.pool # Expose pool for tracker and engine
         # Initialize engine after DB connect
@@ -161,6 +165,9 @@ class TradingBot(Client):
 
         # Set bot commands menu
         try:
+            if not self.is_connected:
+                await self.start()
+            
             await self.set_bot_commands([
                 BotCommand("entry", "Create trading signal"),
                 BotCommand("activetrades", "View active signals"),
@@ -260,8 +267,8 @@ async def main():
     bot = TradingBot()
     try:
         await bot.start_bot()
-        logging.info("Starting bot client...")
-        await bot.start()
+        # logging.info("Starting bot client...") # Already started in start_bot
+        # await bot.start()
         await bot.start_bot_complete()
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):

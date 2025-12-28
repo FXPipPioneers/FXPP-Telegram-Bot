@@ -1,5 +1,6 @@
 import logging
 import os
+import asyncio
 from pyrogram.client import Client
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from src.features.core.config import DEBUG_GROUP_ID, BOT_OWNER_USER_ID
@@ -52,7 +53,7 @@ class DebugLogger:
                         msg_text, 
                         reply_markup=keyboard # type: ignore
                     ),
-                    timeout=10
+                    timeout=15
                 )
                 logger.info(f"Successfully sent debug log to {target_id}")
             except asyncio.TimeoutError:

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from src.features.core.config import AMSTERDAM_TZ, PRICE_TRACKING_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -19,8 +19,6 @@ class PriceTrackingLoop:
         
         while getattr(self.bot, 'running', True):
             try:
-                # Import here as well to be absolutely sure it's available in this scope
-                from datetime import datetime
                 # Record when this price check cycle started
                 PRICE_TRACKING_CONFIG['last_price_check_time'] = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
