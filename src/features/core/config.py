@@ -4,12 +4,13 @@ import logging
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 
+# Explicitly load .env first
+load_dotenv()
+
 import pyrogram.utils as pyrogram_utils
 # Essential fix for "Peer id invalid" errors with channel IDs
 pyrogram_utils.MIN_CHANNEL_ID = -10099999999999
 pyrogram_utils.MIN_CHAT_ID = -9999999999999
-
-load_dotenv()
 
 def safe_int(value, default=0):
     try:
@@ -18,37 +19,43 @@ def safe_int(value, default=0):
         return default
 
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID"))
-TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN_TELEGRAM_BOT")
+TELEGRAM_API_ID = safe_int(os.environ.get("TELEGRAM_API_ID") or os.environ.get("TELEGRAM_API_ID_TELEGRAM_BOT"))
+TELEGRAM_API_HASH = os.environ.get("TELEGRAM_API_HASH") or os.environ.get("TELEGRAM_API_HASH_TELEGRAM_BOT")
 
 # Standardized Group/Owner IDs
-# Hardcoded fallbacks for debugging as per user request
-BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID")) or 6664440870
-FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID"))
-VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID"))
-DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID"))
+BOT_OWNER_USER_ID = safe_int(os.environ.get("BOT_OWNER_USER_ID") or os.environ.get("BOT_OWNER_ID_TELEGRAM_BOT"))
+if not BOT_OWNER_USER_ID:
+    BOT_OWNER_USER_ID = safe_int(os.environ.get("BOT_OWNER_ID"))
 
-SIGNAL_SOURCE_GROUP_ID = safe_int(os.getenv("SIGNAL_SOURCE_GROUP_ID", "-1002360811986"))
-# Ensure bot owner ID is a set
+FREE_GROUP_ID = safe_int(os.environ.get("FREE_GROUP_ID") or os.environ.get("FREE_GROUP_ID_TELEGRAM_BOT"))
+VIP_GROUP_ID = safe_int(os.environ.get("VIP_GROUP_ID") or os.environ.get("VIP_GROUP_ID_TELEGRAM_BOT"))
+DEBUG_GROUP_ID = os.environ.get("DEBUG_GROUP_ID") or os.environ.get("DEBUG_GROUP_ID_TELEGRAM_BOT")
+if not DEBUG_GROUP_ID:
+    DEBUG_GROUP_ID = os.environ.get("DEBUG_ID")
+
+if DEBUG_GROUP_ID and str(DEBUG_GROUP_ID).startswith("-100") and len(str(DEBUG_GROUP_ID)) > 13:
+    pass
+else:
+    DEBUG_GROUP_ID = safe_int(DEBUG_GROUP_ID)
+
+SIGNAL_SOURCE_GROUP_ID = safe_int(os.environ.get("SIGNAL_SOURCE_GROUP_ID", "-1002360811986"))
 BOT_OWNER_IDS = {BOT_OWNER_USER_ID} if BOT_OWNER_USER_ID else set()
 
-
 # Links
-FREE_GROUP_LINK = os.getenv("FREE_GROUP_LINK", "")
-VIP_GROUP_LINK = os.getenv("VIP_GROUP_LINK", "")
+FREE_GROUP_LINK = os.environ.get("FREE_GROUP_LINK", "")
+VIP_GROUP_LINK = os.environ.get("VIP_GROUP_LINK", "")
 VIP_TRIAL_INVITE_LINK = "https://t.me/+5X18tTjgM042ODU0"
 WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
 
-# Global State for Pending Operations
+# Global State
 PENDING_ENTRIES = {}
 
 # Timezone
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 
 # Database Configuration
-# Hardcoded fallbacks for debugging as per user request
-DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql://fxpp_telegram_bot_database_user:xYWX9zSGR4M27Dq8eNmQYD9AVHjsxmfQ@dpg-d51ecr6mcj7s73epdtdg-a.oregon-postgres.render.com/fxpp_telegram_bot_database"
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("DATABASE_URL_TELEGRAM_BOT")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -91,15 +98,14 @@ PAIR_CONFIG = {
 
 EXCLUDED_FROM_TRACKING = ['XAUUSD', 'BTCUSD', 'GER40', 'US100']
 
-# Price Tracking Configuration
 PRICE_TRACKING_CONFIG = {
     "enabled": True,
     "active_trades": {},
     "api_keys": {
-        "currencybeacon_key": os.getenv("CURRENCYBEACON_KEY", ""),
-        "exchangerate_api_key": os.getenv("EXCHANGERATE_API_KEY", ""),
-        "currencylayer_key": os.getenv("CURRENCYLAYER_KEY", ""),
-        "abstractapi_key": os.getenv("ABSTRACTAPI_KEY", "")
+        "currencybeacon_key": os.environ.get("CURRENCYBEACON_KEY", ""),
+        "exchangerate_api_key": os.environ.get("EXCHANGERATE_API_KEY", ""),
+        "currencylayer_key": os.environ.get("CURRENCYLAYER_KEY", ""),
+        "abstractapi_key": os.environ.get("ABSTRACTAPI_KEY", "")
     },
     "api_endpoints": {
         "currencybeacon": "https://api.currencybeacon.com/v1/latest",
@@ -112,7 +118,6 @@ PRICE_TRACKING_CONFIG = {
     "last_price_check_time": None,
 }
 
-# Auto Role and Trial Configuration
 AUTO_ROLE_CONFIG = {
     "enabled": True,
     "duration_hours": 72,

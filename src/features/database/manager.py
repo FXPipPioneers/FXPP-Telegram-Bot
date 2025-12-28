@@ -3,6 +3,10 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Ensure project root is in PYTHONPATH
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -10,7 +14,6 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from typing import Dict
-from src.features.core.config import DATABASE_URL
 from src.features.database.schema import SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -27,10 +30,13 @@ class DatabaseManager:
             logger.info(f"DB Log (No bot): {message}")
 
     async def connect(self):
-        # Prefer DATABASE_URL from config (handles environment and fallbacks)
-        db_url = DATABASE_URL
+        # Always reload to get latest environment
+        load_dotenv()
         
-        # Fallback to individual components
+        # Check all possible environment variable names for the database
+        db_url = os.environ.get("DATABASE_URL") or os.environ.get("DATABASE_URL_TELEGRAM_BOT")
+        
+        # Fallback: Individual components
         if not db_url:
             user = os.environ.get("PGUSER")
             password = os.environ.get("PGPASSWORD")
@@ -41,17 +47,15 @@ class DatabaseManager:
             if all([user, password, host, port, database]):
                 db_url = f"postgresql://{user}:{password}@{host}:{port}/{database}"
         
-        # Last resort fallback (local)
         if not db_url:
-            logger.error("DATABASE_URL and PG components are missing.")
-            db_url = "postgresql://localhost:5432/postgres"
+            logger.error("❌ CRITICAL: No database connection details found (DATABASE_URL missing)")
+            return
 
-        if db_url and db_url.startswith("postgres://"):
+        if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
 
         logger.info(f"Connecting to database...")
         try:
-            # Added connection timeout and pooling optimizations for Render/Neon
             self.pool = await asyncpg.create_pool(
                 db_url, 
                 ssl='prefer',
@@ -60,19 +64,20 @@ class DatabaseManager:
                 command_timeout=60,
                 max_inactive_connection_lifetime=300
             )
+            # Update the bot instance if it exists to ensure it has the pool
+            if self.bot:
+                self.bot.db_pool = self.pool
+
             async with self.pool.acquire() as conn:
-                # Initialize all tables from schema
+                # Initialize schema
                 for table_name, create_sql in SCHEMA.items():
                     try:
                         await conn.execute(create_sql)
                     except Exception as e:
                         logger.error(f"Failed to create table {table_name}: {e}")
                 
-                # Verify migrations for trial_offer_history
+                # Run migrations
                 try:
-                    # Check if offered_at exists (from schema) or offer_sent_date exists (from daily_trial_offers.py)
-                    # The daily_trial_offers.py uses offer_sent_date, but schema.py says offered_at.
-                    # Standardizing to offered_at and adding an index.
                     cols = await conn.fetch("SELECT column_name FROM information_schema.columns WHERE table_name = 'trial_offer_history'")
                     col_names = [r['column_name'] for r in cols]
                     if 'offer_sent_date' in col_names and 'offered_at' not in col_names:
@@ -80,17 +85,9 @@ class DatabaseManager:
                 except Exception as e:
                     logger.error(f"Migration error: {e}")
 
-                # Fresh Start Reset (Per User Request)
-                # This clears trial and peer ID tracking tables for a fresh start on Monday
-                try:
-                    await conn.execute("TRUNCATE TABLE vip_trial_activations, peer_id_checks, active_members, role_history, dm_schedule, trial_offer_history, free_group_joins, emoji_reactions, pending_welcome_dms CASCADE")
-                    logger.info("Fresh Start: Database tables cleared successfully for fresh start.")
-                except Exception as e:
-                    logger.error(f"Fresh Start Reset failed: {e}")
-                
-            logger.info("Database connected and full schema verified.")
+            logger.info("✅ Database connected and verified.")
         except Exception as e:
-            logger.error(f"Database connection failed: {e}")
+            logger.error(f"❌ Database connection failed: {e}")
             
     async def get_active_trades(self):
         if not self.pool: return []
@@ -107,7 +104,6 @@ class DatabaseManager:
                 activation_date = $2, expiry_date = $3
             ''', user_id, activation_date, expiry_date)
             
-            # Also update role history
             await conn.execute('''
                 INSERT INTO role_history (member_id, first_granted, times_granted)
                 VALUES ($1, $2, 1)

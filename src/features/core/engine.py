@@ -26,15 +26,6 @@ class BackgroundEngine:
         """Start all 8 background loops"""
         logger.info("Starting all background loops...")
         
-        # Send startup notification
-        try:
-            from src.features.core.config import DEBUG_GROUP_ID
-            if DEBUG_GROUP_ID:
-                # Use a small delay to ensure bot is fully ready
-                asyncio.create_task(self._send_startup_notification())
-        except Exception as e:
-            logger.error(f"Failed to schedule startup notification: {e}")
-
         try:
             # 1. Price Tracking Loop
             price_loop = PriceTrackingLoop(self.app, self.app)
@@ -90,23 +81,6 @@ class BackgroundEngine:
             logger.error(f"❌ Error starting background loops: {e}")
             raise
     
-    async def _send_startup_notification(self):
-        """Helper to send startup notification once bot is connected"""
-        try:
-            # Wait a bit for connection and session to be fully ready
-            for _ in range(10):
-                if hasattr(self.app, 'is_connected') and self.app.is_connected:
-                    break
-                await asyncio.sleep(1)
-                
-            if hasattr(self.app, 'log_to_debug'):
-                await self.app.log_to_debug("🚀 **Trading Bot Initialized** - All systems operational.")
-                logger.info("Sent startup notification to debug group.")
-            else:
-                logger.error("Bot instance has no log_to_debug method.")
-        except Exception as e:
-            logger.error(f"Startup notification failed: {e}")
-
     async def stop(self):
         """Stop all background loops"""
         logger.info("Stopping all background loops...")
