@@ -2,7 +2,13 @@ import os
 import pytz
 import logging
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+import pyrogram.utils as pyrogram_utils
+# Essential fix for "Peer id invalid" errors with channel IDs
+pyrogram_utils.MIN_CHANNEL_ID = -10099999999999
+pyrogram_utils.MIN_CHAT_ID = -9999999999999
+pyrogram_utils.MIN_USER_ID = -10099999999999
 
 load_dotenv()
 
@@ -17,30 +23,11 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID", "0"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 
-# Group IDs
-BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "0"))
-FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID", "0"))
-VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
-
-# Use the direct value from environment variable for Peer ID compatibility
-_debug_id = os.getenv("DEBUG_GROUP_ID", "0")
-# Standardize DEBUG_GROUP_ID as an integer for Telegram channel/group IDs
-try:
-    _clean_id = _debug_id.strip()
-    if not _clean_id:
-        DEBUG_GROUP_ID = 0
-    elif _clean_id.startswith("-100"):
-        # Already has the correct channel prefix
-        DEBUG_GROUP_ID = int(_clean_id)
-    elif _clean_id.startswith("-"):
-        # It's a negative number, keep it as is
-        DEBUG_GROUP_ID = int(_clean_id)
-    else:
-        # If it's a positive number but meant for a group, Telegram often needs it negative
-        # However, we'll try to parse it directly first as the user might have provided the full -100 ID
-        DEBUG_GROUP_ID = int(_clean_id)
-except (ValueError, TypeError):
-    DEBUG_GROUP_ID = 0
+# Standardized Group/Owner IDs
+BOT_OWNER_USER_ID = 1045239145
+FREE_GROUP_ID = -1002360811986
+VIP_GROUP_ID = -1002446702636
+DEBUG_GROUP_ID = -1003277177952
 
 SIGNAL_SOURCE_GROUP_ID = safe_int(os.getenv("SIGNAL_SOURCE_GROUP_ID", "0"))
 
@@ -49,6 +36,9 @@ FREE_GROUP_LINK = os.getenv("FREE_GROUP_LINK", "")
 VIP_GROUP_LINK = os.getenv("VIP_GROUP_LINK", "")
 VIP_TRIAL_INVITE_LINK = "https://t.me/+5X18tTjgM042ODU0"
 WHOP_PURCHASE_LINK = "https://whop.com/gold-pioneer/gold-pioneer/"
+
+# Global State for Pending Operations
+PENDING_ENTRIES = {}
 
 # Timezone
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
@@ -97,17 +87,6 @@ PAIR_CONFIG = {
 
 EXCLUDED_FROM_TRACKING = ['XAUUSD', 'BTCUSD', 'GER40', 'US100']
 
-
-# Logging Configuration
-LOGGING_CONFIG = {
-    "level": logging.INFO,
-    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "filename": "bot.log"
-}
-
-# Global State for Pending Operations
-PENDING_ENTRIES = {}
-
 # Price Tracking Configuration
 PRICE_TRACKING_CONFIG = {
     "enabled": True,
@@ -125,7 +104,7 @@ PRICE_TRACKING_CONFIG = {
         "abstractapi": "https://exchange-rates.abstractapi.com/v1/live"
     },
     "api_priority_order": ["currencybeacon", "exchangerate_api", "currencylayer", "abstractapi"],
-    "check_interval": 75,
+    "check_interval": 120,
     "last_price_check_time": None,
 }
 
@@ -144,16 +123,6 @@ MESSAGE_TEMPLATES = {
         "Trial Expired": {
             "id": "trial_expired",
             "message": "Hey! Your **3-day free access** to the VIP Group has unfortunately **ran out**. We truly hope you were able to benefit with us & we hope to see you back soon! For now, feel free to continue following our trade signals in our Free Group: https://t.me/fxpippioneers\n\n**Want to rejoin the VIP Group? You can regain access through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-        },
-        "Trial Rejected (Used Before)": {
-            "id": "trial_rejected",
-            "message": "Hey! Unfortunately, our free trial can only be used once per person. Your trial has already ran out, so we can't give you another.\n\nWe truly hope that you were able to profit with us during your free trial. If you were happy with the results you got, then feel free to rejoin our VIP group through this link: https://whop.com/gold-pioneer/gold-pioneer/"
-        }
-    },
-    "Welcome & Onboarding": {
-        "Welcome DM (New Free Group Member)": {
-            "id": "welcome_free",
-            "message": "**Hey, Welcome to FX Pip Pioneers!**\n\n**Want to try our VIP Group for FREE?**\nWe're offering a **3-day free trial** of our VIP Group where you'll receive **6+ high-quality trade signals per day**.\n\n**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\nGood luck trading!"
         }
     }
 }

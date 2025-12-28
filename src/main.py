@@ -10,6 +10,11 @@ from aiohttp import web
 from pyrogram.client import Client
 from pyrogram import filters
 from pyrogram.types import Message, CallbackQuery, BotCommand, BotCommandScopeChat
+
+import pyrogram.utils as pyrogram_utils
+pyrogram_utils.MIN_CHANNEL_ID = -1009999999999
+pyrogram_utils.MIN_CHAT_ID = -999999999999
+
 from src.features.core.config import TELEGRAM_BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH, BOT_OWNER_USER_ID, AMSTERDAM_TZ, PRICE_TRACKING_CONFIG
 from src.features.database.manager import DatabaseManager
 from src.features.core.engine import BackgroundEngine

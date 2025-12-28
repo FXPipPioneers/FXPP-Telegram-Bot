@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+from datetime import datetime
 from pyrogram.client import Client
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from src.features.core.config import DEBUG_GROUP_ID, BOT_OWNER_USER_ID
@@ -27,10 +28,14 @@ class DebugLogger:
         try:
             target_id = int(DEBUG_GROUP_ID)
 
+            # Ensure client is connected before sending
             if not self.app.is_connected:
-                # If bot is not connected, we can't send but we can log locally
-                logger.info(f"Bot client not connected. Local Log: {message}")
-                return
+                try:
+                    await self.app.start()
+                    logger.info("Bot client connected via logger")
+                except Exception as e:
+                    logger.error(f"Failed to connect bot client in logger: {e}")
+                    return
 
             header = "🚨 **SYSTEM ERROR**" if is_error else "📊 **SYSTEM LOG**"
             footer = f"\n\n{self.bot_owner_username}" if is_error else ""
