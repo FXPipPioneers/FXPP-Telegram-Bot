@@ -49,8 +49,6 @@ class PeerIDEscalationLoop:
                     await asyncio.sleep(60)
                     continue
                 
-                await self.bot.log_to_debug("⏳ **Peer ID Escalation Loop**: Scanning pending checks...")
-                
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
                 async with self.db_pool.acquire() as conn:
@@ -62,6 +60,10 @@ class PeerIDEscalationLoop:
                         WHERE NOT peer_id_established AND welcome_dm_sent = FALSE
                         ORDER BY next_check_at ASC
                     ''')
+                    
+                    # Only log if there are actually pending checks
+                    if pending:
+                        logger.info(f"Peer ID Escalation Loop: Found {len(pending)} pending checks")
                     
                     for row in pending:
                         user_id = row['user_id']

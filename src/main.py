@@ -57,14 +57,17 @@ class TradingBot(Client):
             bot_token=TELEGRAM_BOT_TOKEN
         )
         self.db = DatabaseManager()
-        self.db_pool = None # Added to fix AttributeError
-        self.engine: CoreBackgroundEngine | None = None # Will be initialized in start_bot
+        self.db_pool = None
+        self.engine: CoreBackgroundEngine | None = None
         self.tracker = PriceTracker(self)
         self.logger_tool = DebugLogger(self)
         self.awaiting_price_input = {}
         self.awaiting_custom_pair = {}
         self.override_trade_mappings = {}
         self.pending_multi_select = {}
+        
+        # Register handlers during initialization (before start)
+        self._register_handlers()
 
     async def start_health_check(self):
         """Start a simple web server for Render health checks"""
@@ -99,25 +102,9 @@ class TradingBot(Client):
             return True
         return False
 
-    async def start_bot(self):
-        # Start health check server
-        await self.start_health_check()
+    def _register_handlers(self):
+        """Register all message and callback handlers (called from __init__)"""
         
-        # Start bot client FIRST to ensure it's connected
-        logging.info("Starting bot client...")
-        await self.start()
-        
-        await self.db.connect()
-        self.db_pool = self.db.pool # Expose pool for tracker and engine
-        # Initialize engine after DB connect
-        self.db.bot = self
-        self.engine = CoreBackgroundEngine(self.db, self)
-        
-        # Register Handlers
-        register_community_handlers(self, self.db.pool, self)
-        register_trading_handlers(self, self.db.pool)
-        
-        # Register Modularized Commands
         @self.on_message(filters.command("entry"))
         async def _entry(client, message):
             await handle_entry(self, client, message)
@@ -170,36 +157,6 @@ class TradingBot(Client):
         async def _clear(client, message):
             await handle_clear_member(client, message, self.is_owner, self)
 
-        # Set bot commands menu
-        try:
-            if BOT_OWNER_USER_ID:
-                owner_commands = [
-                    BotCommand("entry", "Create trading signal"),
-                    BotCommand("activetrades", "View active signals"),
-                    BotCommand("tradeoverride", "Manual trade status control"),
-                    BotCommand("pricetest", "Test price fetching"),
-                    BotCommand("dbstatus", "Database health check"),
-                    BotCommand("dmstatus", "DM schedule status"),
-                    BotCommand("freetrialusers", "Free trial management"),
-                    BotCommand("sendwelcomedm", "Welcome DM management"),
-                    BotCommand("newmemberslist", "New members tracking"),
-                    BotCommand("dmmessages", "DM message management"),
-                    BotCommand("peeridstatus", "Peer ID verification status"),
-                    BotCommand("retracttrial", "Retract trial access"),
-                    BotCommand("clearmember", "Clear member data")
-                ]
-                try:
-                    await self.set_bot_commands(
-                        owner_commands,
-                        scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
-                    logging.info(f"✅ Bot commands registered for user {BOT_OWNER_USER_ID} ({len(owner_commands)} commands)")
-                except Exception as scope_error:
-                    logging.error(f"❌ Error setting owner-scoped commands: {scope_error}")
-            else:
-                logging.warning("⚠️  BOT_OWNER_USER_ID not set, cannot register owner-specific commands")
-        except Exception as e:
-            logging.error(f"❌ Error registering bot commands: {e}")
-
         # Callbacks
         @self.on_callback_query(filters.regex("^entry_"))
         async def _entry_cb(client, cb: CallbackQuery):
@@ -241,10 +198,58 @@ class TradingBot(Client):
         async def _clrtrl_cb(client, cb):
             await handle_cleartrial_callback(client, cb, self.is_owner, self)
 
-        @self.on_callback_query(filters.regex("^at_"))
-        async def _at_cb(client, cb):
-            await handle_activetrades_callback(self, client, cb)
+    async def register_bot_commands(self):
+        """Register bot commands (called after client starts to avoid PEER_ID_INVALID)"""
+        try:
+            if BOT_OWNER_USER_ID:
+                owner_commands = [
+                    BotCommand("entry", "Create trading signal"),
+                    BotCommand("activetrades", "View active signals"),
+                    BotCommand("tradeoverride", "Manual trade status control"),
+                    BotCommand("pricetest", "Test price fetching"),
+                    BotCommand("dbstatus", "Database health check"),
+                    BotCommand("dmstatus", "DM schedule status"),
+                    BotCommand("freetrialusers", "Free trial management"),
+                    BotCommand("sendwelcomedm", "Welcome DM management"),
+                    BotCommand("newmemberslist", "New members tracking"),
+                    BotCommand("dmmessages", "DM message management"),
+                    BotCommand("peeridstatus", "Peer ID verification status"),
+                    BotCommand("retracttrial", "Retract trial access"),
+                    BotCommand("clearmember", "Clear member data")
+                ]
+                try:
+                    await self.set_bot_commands(
+                        owner_commands,
+                        scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
+                    logging.info(f"✅ Bot commands registered for user {BOT_OWNER_USER_ID} ({len(owner_commands)} commands)")
+                except Exception as scope_error:
+                    logging.error(f"❌ Error setting owner-scoped commands: {scope_error}")
+            else:
+                logging.warning("⚠️  BOT_OWNER_USER_ID not set, cannot register owner-specific commands")
+        except Exception as e:
+            logging.error(f"❌ Error registering bot commands: {e}")
 
+    async def start_bot(self):
+        # Start health check server
+        await self.start_health_check()
+        
+        # Start bot client FIRST to ensure it's connected
+        logging.info("Starting bot client...")
+        await self.start()
+        
+        await self.db.connect()
+        self.db_pool = self.db.pool
+        # Initialize engine after DB connect
+        self.db.bot = self
+        self.engine = CoreBackgroundEngine(self.db, self)
+        
+        # Register community and trading handlers
+        register_community_handlers(self, self.db.pool, self)
+        register_trading_handlers(self, self.db.pool)
+        
+        # Register bot commands after client is started
+        await self.register_bot_commands()
+        
         # Helper methods required by commands
         self.show_active_trades_list = lambda msg: show_active_trades_list(self, msg)
         self.show_position_guide = lambda msg: show_position_guide(self, msg)
