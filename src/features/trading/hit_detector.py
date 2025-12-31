@@ -84,6 +84,8 @@ class HitDetector:
         # Activate breakeven after TP2 hit
         if tp_level == 'TP2' and not trade.get('breakeven_active'):
             trade['breakeven_active'] = True
+            if hasattr(bot, 'log_to_debug'):
+                await bot.log_to_debug(f"🔄 **Breakeven Activated**: {trade['pair']} {trade['action']} (TP2 hit)")
         
         # Complete trade after TP3 hit
         if tp_level == 'TP3':
@@ -314,36 +316,49 @@ class HitDetector:
             logger.error(f"Error removing trade from DB: {e}")
 
     def validate_chronological_hits(self, hits: List[Dict]) -> List[Dict]:
-        """Validate hits chronologically according to trading rules"""
+        """
+        Feature 6: Strict Hit Validation
+        Rule 1: If SL was hit first, ignore all subsequent TP hits
+        Rule 2: If SL hits after TP2, ignore it (breakeven protection)
+        Rule 3: Cannot hit both TP3 and SL
+        """
         valid_hits = []
-        sl_hit = False
-        tp_levels_hit = set()
+        sl_hit_time = None
+        tp2_hit_time = None
+        tp3_hit_time = None
         
-        for hit in sorted(hits, key=lambda x: x.get('hit_time', 0)):
+        # Sort hits by time
+        sorted_hits = sorted(hits, key=lambda x: x.get('hit_time', 0))
+        
+        for hit in sorted_hits:
             hit_type = hit.get('hit_type')
             hit_level = hit.get('hit_level')
+            hit_time = hit.get('hit_time', 0)
             
-            # SL prevents any subsequent TP hits
-            if sl_hit and hit_type == 'tp':
+            # Rule 1: If SL was hit first, ignore all subsequent TP hits
+            if sl_hit_time and hit_type == 'tp' and hit_time > sl_hit_time:
+                continue
+                
+            # Rule 2: If SL hits after TP2, ignore it (breakeven protection)
+            if hit_type == 'sl' and tp2_hit_time and hit_time > tp2_hit_time:
+                continue
+                
+            # Rule 3: Cannot hit both TP3 and SL (if TP3 hit first, ignore SL)
+            if hit_type == 'sl' and tp3_hit_time and hit_time > tp3_hit_time:
                 continue
             
-            # SL can't happen after TP2
-            if hit_type == 'sl' and 'TP2' in tp_levels_hit:
+            if hit_type == 'tp' and hit_level == 'TP3' and sl_hit_time and hit_time > sl_hit_time:
                 continue
-            
-            # SL can't happen after TP3
-            if hit_type == 'sl' and 'TP3' in tp_levels_hit:
-                continue
-            
-            # TP3 can't happen after SL
-            if hit_type == 'tp' and hit_level == 'TP3' and sl_hit:
-                continue
+
+            # Record hit times for rules
+            if hit_type == 'sl':
+                sl_hit_time = hit_time
+            elif hit_type == 'tp':
+                if hit_level == 'TP2':
+                    tp2_hit_time = hit_time
+                elif hit_level == 'TP3':
+                    tp3_hit_time = hit_time
             
             valid_hits.append(hit)
-            
-            if hit_type == 'sl':
-                sl_hit = True
-            elif hit_type == 'tp':
-                tp_levels_hit.add(hit_level)
         
         return valid_hits

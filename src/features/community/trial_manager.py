@@ -62,6 +62,38 @@ class TrialManager:
         expiry = current.replace(hour=22, minute=59, second=0, microsecond=0)
         return expiry
 
+    async def validate_and_fix_trial_expiry_times(self):
+        """Check all existing trial members and fix their expiry times if incorrect (Feature 2)"""
+        fixed_count = 0
+        try:
+            for member_id, data in list(AUTO_ROLE_CONFIG['active_members'].items()):
+                try:
+                    join_time = datetime.fromisoformat(data['joined_at'])
+                    expiry_time = datetime.fromisoformat(data['expiry_time'])
+                    
+                    if join_time.tzinfo is None: join_time = AMSTERDAM_TZ.localize(join_time)
+                    if expiry_time.tzinfo is None: expiry_time = AMSTERDAM_TZ.localize(expiry_time)
+                    
+                    correct_expiry = self.calculate_trial_expiry_time(join_time)
+                    time_diff = abs((correct_expiry - expiry_time).total_seconds())
+                    
+                    if time_diff > 60:
+                        data['expiry_time'] = correct_expiry.isoformat()
+                        
+                        if self.db and hasattr(self.db, 'pool') and self.db.pool:
+                            async with self.db.pool.acquire() as conn:
+                                await conn.execute(
+                                    "UPDATE active_members SET expiry_time = $1 WHERE member_id = $2",
+                                    correct_expiry, int(member_id))
+                        fixed_count += 1
+                except Exception as row_err:
+                    logger.error(f"Error fixing trial for {member_id}: {row_err}")
+                    
+            if fixed_count > 0 and hasattr(self.bot, 'log_to_debug'):
+                await self.bot.log_to_debug(f"🛠️ Validated trial expiry times: fixed {fixed_count} incorrect times.")
+        except Exception as e:
+            logger.error(f"Error validating trial expiry times: {e}")
+
     async def register_trial(self, user, current_time: datetime):
         """Register a user for a VIP trial"""
         user_id_str = str(user.id)
@@ -81,7 +113,7 @@ class TrialManager:
             'last_expired': None
         }
         
-        if self.db:
+        if self.db and hasattr(self.db, 'pool') and self.db.pool:
             try:
                 async with self.db.pool.acquire() as conn:
                     await conn.execute(

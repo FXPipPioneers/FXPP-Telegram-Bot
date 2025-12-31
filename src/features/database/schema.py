@@ -67,7 +67,8 @@ SCHEMA = {
             role_id BIGINT,
             guild_id BIGINT,
             weekend_delayed BOOLEAN DEFAULT FALSE,
-            expiry_time TIMESTAMP WITH TIME ZONE
+            expiry_time TIMESTAMP WITH TIME ZONE,
+            custom_duration BOOLEAN DEFAULT FALSE
         );
     """,
     "role_history": """
@@ -98,9 +99,10 @@ SCHEMA = {
     """,
     "bot_status": """
         CREATE TABLE IF NOT EXISTS bot_status (
-            id SERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY DEFAULT 1,
             last_online TIMESTAMP WITH TIME ZONE,
-            heartbeat_time TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            heartbeat_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            CONSTRAINT tg_single_row_constraint UNIQUE (id)
         );
     """,
     "peer_id_checks": """

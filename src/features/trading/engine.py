@@ -2,12 +2,12 @@ from pyrogram.client import Client
 from typing import Dict, Optional, List, Any
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import json
 import random
 import asyncio
-from src.features.core.config import PAIR_CONFIG, EXCLUDED_FROM_TRACKING, AMSTERDAM_TZ, BOT_OWNER_USER_ID, PRICE_TRACKING_CONFIG
+from src.features.core.config import PAIR_CONFIG, EXCLUDED_FROM_TRACKING, AMSTERDAM_TZ, BOT_OWNER_USER_ID, PRICE_TRACKING_CONFIG, VIP_GROUP_ID, FREE_GROUP_ID
 from src.features.trading.hit_detector import HitDetector
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,39 @@ class TradingEngine:
         self.db_pool = db_pool
         self.bot = bot
         self.hit_detector = HitDetector(db_pool)
+
+    async def recover_missed_signals(self):
+        """Check for trading signals sent while bot was offline (Feature 1: Missed Signal Recovery)"""
+        if not PRICE_TRACKING_CONFIG["enabled"]:
+            return
+        try:
+            if hasattr(self.bot, 'log_to_debug'):
+                await self.bot.log_to_debug("🔍 Scanning for missed trading signals while offline...")
+            
+            recovered_signals = 0
+            for group_id in [VIP_GROUP_ID, FREE_GROUP_ID]:
+                if not group_id: continue
+                try:
+                    async for message in self.bot.get_chat_history(group_id, limit=100):
+                        if not message or not message.text: continue
+                        if message.from_user and message.from_user.id != BOT_OWNER_USER_ID: continue
+                        if "Trade Signal For:" not in message.text: continue
+                        
+                        trade_key = f"{group_id}_{message.id}"
+                        if trade_key in PRICE_TRACKING_CONFIG['active_trades']: continue
+                        
+                        trade_data = SignalParser.parse_message(message.text)
+                        if not trade_data: continue
+                        
+                        await self.handle_manual_signal(message.text, group_id, message.id, self.bot)
+                        recovered_signals += 1
+                except Exception as e:
+                    logger.error(f"Error scanning group {group_id}: {e}")
+            
+            if recovered_signals > 0 and hasattr(self.bot, 'log_to_debug'):
+                await self.bot.log_to_debug(f"✅ Successfully recovered {recovered_signals} missed signals.")
+        except Exception as e:
+            logger.error(f"Error during missed signal recovery: {e}")
 
     async def handle_manual_signal(self, message_text, chat_id, message_id, bot):
         """Automatically detect and parse manual signals"""
@@ -187,32 +220,50 @@ class TradingEngine:
         }
 
     def validate_chronological_hits(self, hits: list) -> list:
-        """Validate hits chronologically according to trading rules"""
+        """
+        Feature 6: Strict Hit Validation
+        Rule 1: If SL was hit first, ignore all subsequent TP hits
+        Rule 2: If SL hits after TP2, ignore it (breakeven protection)
+        Rule 3: Cannot hit both TP3 and SL
+        """
         valid_hits = []
-        sl_hit = False
-        tp_levels_hit = set()
+        sl_hit_time = None
+        tp2_hit_time = None
+        tp3_hit_time = None
         
-        for hit in sorted(hits, key=lambda x: x.get('hit_time', 0)):
+        # Sort hits by time
+        sorted_hits = sorted(hits, key=lambda x: x.get('hit_time', 0))
+        
+        for hit in sorted_hits:
             hit_type = hit.get('hit_type')
             hit_level = hit.get('hit_level')
+            hit_time = hit.get('hit_time', 0)
             
-            if sl_hit and hit_type == 'tp':
+            # Rule 1: If SL was hit first, ignore all subsequent TP hits
+            if sl_hit_time and hit_type == 'tp' and hit_time > sl_hit_time:
+                continue
+                
+            # Rule 2: If SL hits after TP2, ignore it (breakeven protection)
+            if hit_type == 'sl' and tp2_hit_time and hit_time > tp2_hit_time:
+                continue
+                
+            # Rule 3: Cannot hit both TP3 and SL (if TP3 hit first, ignore SL)
+            if hit_type == 'sl' and tp3_hit_time and hit_time > tp3_hit_time:
                 continue
             
-            if hit_type == 'sl' and 'TP2' in tp_levels_hit:
+            if hit_type == 'tp' and hit_level == 'TP3' and sl_hit_time and hit_time > sl_hit_time:
                 continue
-            
-            if hit_type == 'sl' and 'TP3' in tp_levels_hit:
-                continue
-            if hit_type == 'tp' and hit_level == 'TP3' and sl_hit:
-                continue
+
+            # Record hit times for rules
+            if hit_type == 'sl':
+                sl_hit_time = hit_time
+            elif hit_type == 'tp':
+                if hit_level == 'TP2':
+                    tp2_hit_time = hit_time
+                elif hit_level == 'TP3':
+                    tp3_hit_time = hit_time
             
             valid_hits.append(hit)
-            
-            if hit_type == 'sl':
-                sl_hit = True
-            elif hit_type == 'tp':
-                tp_levels_hit.add(hit_level)
         
         return valid_hits
 
@@ -267,6 +318,11 @@ class BackgroundEngine:
         from src.features.loops.engagement_tracking import EngagementTrackingLoop
         engagement_loop = EngagementTrackingLoop(self.bot, self.db.pool, self.bot)
         asyncio.create_task(engagement_loop.run())
+
+        # 8. Start Welcome DM Retry Loop (Feature 5)
+        from src.features.loops.welcome_dm_retry import WelcomeDMRetryLoop
+        welcome_retry_loop = WelcomeDMRetryLoop(self.bot)
+        asyncio.create_task(welcome_retry_loop.run())
 
     async def stop(self):
         """Stop all background loops"""

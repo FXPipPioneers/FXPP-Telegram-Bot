@@ -49,6 +49,37 @@ class CommunityHandlers:
             except Exception as e:
                 logger.error(f"Failed to send debug log: {e}")
     
+    async def ensure_active_trial_peers(self):
+        """Ensure all active trial users are in peer_id_checks for welcome DM sending (Feature 4)"""
+        try:
+            if not self.db_pool: return
+            
+            # Specific IDs from legacy bot that need to be ensured
+            hardcoded_ids = [7556551997, 1945981012] 
+            
+            # Also get all active trials from memory/config
+            active_ids = []
+            if 'active_members' in AUTO_ROLE_CONFIG:
+                active_ids = [int(uid) for uid in AUTO_ROLE_CONFIG['active_members'].keys() if str(uid).isdigit()]
+            
+            all_ids = list(set(hardcoded_ids + active_ids))
+            
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            next_check = current_time + timedelta(minutes=3)
+            
+            async with self.db_pool.acquire() as conn:
+                for uid in all_ids:
+                    # Only insert if not already there
+                    await conn.execute('''
+                        INSERT INTO peer_id_checks (user_id, joined_at, next_check_at, welcome_dm_sent)
+                        VALUES ($1, $2, $3, FALSE)
+                        ON CONFLICT (user_id) DO NOTHING
+                    ''', uid, current_time, next_check)
+            
+            await self.log_to_debug(f"🔄 Initialized Peer ID checks for {len(all_ids)} active trial users.")
+        except Exception as e:
+            logger.error(f"Error initializing trial peers: {e}")
+
     # ========== JOIN REQUEST HANDLER ==========
     async def process_join_request(self, client: Client, join_request: ChatJoinRequest):
         """Handle join requests to VIP group - auto-approve trial users"""
@@ -149,7 +180,8 @@ class CommunityHandlers:
         from src.features.community.trial_manager import TrialManager
         trial_manager = TrialManager(self.db_pool, self.bot)
         expiry_time, is_weekend = await trial_manager.register_trial(user, current_time)
-        await self.bot.save_auto_role_config()
+        if hasattr(self.bot, 'save_auto_role_config'):
+            await self.bot.save_auto_role_config()
         
         try:
             from src.features.community.dm_manager import DMManager
@@ -165,11 +197,18 @@ class CommunityHandlers:
         if not message.from_user:
             return
         user_id = message.from_user.id
+
+        # Logic Difference: Support Message for Non-Owners
         if not await self.is_owner(user_id):
+            if message.chat.type == "private":
+                await message.reply(
+                    "This is a private trading bot that can only be used by members of the FX Pip Pioneers team. \n\n"
+                    "If you need support or have questions, please contact @fx_pippioneers."
+                )
             return
 
         # Entry Command: Custom Pair Input
-        if user_id in self.bot.awaiting_custom_pair:
+        if hasattr(self.bot, 'awaiting_custom_pair') and user_id in self.bot.awaiting_custom_pair:
             pair = message.text.strip().upper()
             from src.features.core.config import PENDING_ENTRIES, EXCLUDED_FROM_TRACKING
             entry_data = PENDING_ENTRIES.get(user_id)
@@ -194,7 +233,7 @@ class CommunityHandlers:
             return
 
         # Entry Command: Price Input
-        if user_id in self.bot.awaiting_price_input:
+        if hasattr(self.bot, 'awaiting_price_input') and user_id in self.bot.awaiting_price_input:
             try:
                 price = float(message.text.strip())
                 from src.features.core.config import PENDING_ENTRIES
@@ -213,9 +252,6 @@ class CommunityHandlers:
                 await message.reply("❌ Invalid price. Please enter a number.")
             return
 
-        # Original legacy handle_text_input call if any (but we've ported the main parts now)
-        # await self.bot.handle_text_input(client, message)
-    
     async def delete_service_messages(self, client: Client, message: Message):
         if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
             try: await message.delete()
@@ -226,12 +262,28 @@ class CommunityHandlers:
             asyncio.create_task(self._fetch_and_store_reactions(message))
     
     async def _fetch_and_store_reactions(self, message: Message):
+        """Fetch actual users who reacted and store individually for engagement tracking (Fixed Feature 14)"""
         try:
+            if not message.reactions or not self.db_pool:
+                return
+            
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            
             async with self.db_pool.acquire() as conn:
                 for reaction in message.reactions:
                     emoji_str = str(reaction.emoji) if hasattr(reaction, 'emoji') else str(reaction)
-                    pass
+                    
+                    try:
+                        # Fetch the actual users who reacted with this emoji
+                        async for reactor in self.app.get_reaction_users(message.chat.id, message.id, emoji_str):
+                            await conn.execute(
+                                '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
+                                   VALUES ($1, $2, $3, $4)
+                                   ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
+                                reactor.id, message.id, emoji_str, current_time
+                            )
+                    except Exception as e:
+                        logger.debug(f"Error fetching reactors for emoji {emoji_str}: {e}")
         except Exception as e:
             logger.debug(f"Error storing reactions: {e}")
 

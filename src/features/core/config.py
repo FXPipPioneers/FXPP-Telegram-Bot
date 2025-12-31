@@ -19,20 +19,17 @@ def safe_int(value, default=0):
         return default
 
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN_TELEGRAM_BOT")
-TELEGRAM_API_ID = safe_int(os.environ.get("TELEGRAM_API_ID") or os.environ.get("TELEGRAM_API_ID_TELEGRAM_BOT"))
-TELEGRAM_API_HASH = os.environ.get("TELEGRAM_API_HASH") or os.environ.get("TELEGRAM_API_HASH_TELEGRAM_BOT")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN_TELEGRAM_BOT") or os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_API_ID = safe_int(os.environ.get("TELEGRAM_API_ID") or os.environ.get("TELEGRAM_API_ID_TELEGRAM_BOT") or os.environ.get("API_ID") or os.environ.get("APP_ID"))
+TELEGRAM_API_HASH = os.environ.get("TELEGRAM_API_HASH") or os.environ.get("TELEGRAM_API_HASH_TELEGRAM_BOT") or os.environ.get("API_HASH") or os.environ.get("APP_HASH")
 
 # Standardized Group/Owner IDs
-BOT_OWNER_USER_ID = safe_int(os.environ.get("BOT_OWNER_USER_ID") or os.environ.get("BOT_OWNER_ID_TELEGRAM_BOT"))
-if not BOT_OWNER_USER_ID:
-    BOT_OWNER_USER_ID = safe_int(os.environ.get("BOT_OWNER_ID"))
+BOT_OWNER_USER_ID = safe_int(os.environ.get("BOT_OWNER_USER_ID") or os.environ.get("BOT_OWNER_ID_TELEGRAM_BOT") or os.environ.get("BOT_OWNER_ID_BOT") or os.environ.get("BOT_OWNER_ID"))
+BOT_OWNER_IDS = {BOT_OWNER_USER_ID} if BOT_OWNER_USER_ID else set()
 
-FREE_GROUP_ID = safe_int(os.environ.get("FREE_GROUP_ID") or os.environ.get("FREE_GROUP_ID_TELEGRAM_BOT"))
-VIP_GROUP_ID = safe_int(os.environ.get("VIP_GROUP_ID") or os.environ.get("VIP_GROUP_ID_TELEGRAM_BOT"))
-DEBUG_GROUP_ID = os.environ.get("DEBUG_GROUP_ID") or os.environ.get("DEBUG_GROUP_ID_TELEGRAM_BOT")
-if not DEBUG_GROUP_ID:
-    DEBUG_GROUP_ID = os.environ.get("DEBUG_ID")
+FREE_GROUP_ID = safe_int(os.environ.get("FREE_GROUP_ID") or os.environ.get("FREE_GROUP_ID_TELEGRAM_BOT") or os.environ.get("FREE_GROUP_ID_BOT"))
+VIP_GROUP_ID = safe_int(os.environ.get("VIP_GROUP_ID") or os.environ.get("VIP_GROUP_ID_TELEGRAM_BOT") or os.environ.get("VIP_GROUP_ID_BOT"))
+DEBUG_GROUP_ID = os.environ.get("DEBUG_GROUP_ID") or os.environ.get("DEBUG_GROUP_ID_TELEGRAM_BOT") or os.environ.get("DEBUG_GROUP_ID_BOT") or os.environ.get("DEBUG_ID")
 
 if DEBUG_GROUP_ID and str(DEBUG_GROUP_ID).startswith("-100") and len(str(DEBUG_GROUP_ID)) > 13:
     pass

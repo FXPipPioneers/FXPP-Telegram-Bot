@@ -58,7 +58,7 @@ class TradingBot(Client):
             api_hash=str(TELEGRAM_API_HASH),
             bot_token=str(TELEGRAM_BOT_TOKEN)
         )
-        self.db = DatabaseManager()
+        self.db = DatabaseManager(self) # Pass self to ensure pool is shared
         self.db_pool = None
         self.engine: CoreBackgroundEngine | None = None
         self.tracker = PriceTracker(self)
@@ -99,16 +99,17 @@ class TradingBot(Client):
         return user_id == BOT_OWNER_USER_ID
 
     def is_weekend_market_closed(self) -> bool:
-        """Check if market is closed (Friday 22:00 to Sunday 22:00 UTC)"""
-        now = datetime.now(pytz.UTC)
+        """
+        Feature 7: Market Closure Timing
+        Check if market is closed (Friday 23:00 to Sunday 23:55 Amsterdam time)
+        """
+        now = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
         weekday = now.weekday()  # 0=Monday, 4=Friday, 5=Saturday, 6=Sunday
         hour = now.hour
+        minute = now.minute
 
-        if weekday == 4: # Friday
-            return hour >= 22
-        if weekday in [5, 6]: # Saturday or Sunday
-            if weekday == 6: # Sunday
-                return hour < 22
+        # Market closes Friday 23:00 Amsterdam time
+        if (weekday == 4 and hour >= 23) or weekday == 5 or (weekday == 6 and hour < 23) or (weekday == 6 and hour == 23 and minute < 55):
             return True
         return False
 
@@ -306,6 +307,19 @@ class TradingBot(Client):
         async def _clrtrl_cb(client, cb):
             await handle_cleartrial_callback(client, cb, self.is_owner, self)
 
+        @self.on_message(filters.group & filters.service)
+        async def delete_service_messages(client, message: Message):
+            """
+            Feature 13: Auto-Delete Service Messages
+            Auto-delete all service messages from VIP and FREE groups
+            """
+            from src.features.core.config import VIP_GROUP_ID, FREE_GROUP_ID
+            if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
+                try:
+                    await message.delete()
+                except Exception as e:
+                    logging.debug(f"Could not delete service message: {e}")
+
         @self.on_message(filters.private & filters.text & ~filters.command([
             "entry", "activetrades", "tradeoverride", "pricetest",
             "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
@@ -409,10 +423,14 @@ class TradingBot(Client):
         # Start bot client FIRST to ensure it's connected
         logging.info("Starting bot client...")
         try:
+            # Check for existing session and try to stop it properly if it's lingering
+            if self.is_connected:
+                await self.stop()
+                await asyncio.sleep(1)
+            
             await self.start()
         except Exception as e:
             logging.error(f"❌ Critical error starting client: {e}")
-            # If token is missing, check environment variables
             if "key is required" in str(e):
                 logging.error("TELEGRAM_BOT_TOKEN is missing or invalid in environment.")
             raise e
@@ -420,7 +438,6 @@ class TradingBot(Client):
         await self.db.connect()
         self.db_pool = self.db.pool
         # Initialize engine after DB connect
-        self.db.bot = self
         self.engine = CoreBackgroundEngine(self.db, self)
         
         # Register community and trading handlers
@@ -464,13 +481,30 @@ class TradingBot(Client):
         """Start all background tasks after bot initialization and send detailed report"""
         # Resolve debug group peer on startup to prevent CHAT_ID_INVALID
         from src.features.core.config import DEBUG_GROUP_ID
+        
+        # Add 1-minute delay before resolving debug group and starting background tasks
+        logging.info("Starting 60-second delay before activating debug channel and background loops...")
+        await asyncio.sleep(60)
+        
         if DEBUG_GROUP_ID:
-            try:
-                await self.get_chat(int(DEBUG_GROUP_ID))
-                logging.info(f"✅ Successfully resolved debug group {DEBUG_GROUP_ID}")
-            except Exception as e:
-                logging.error(f"❌ Failed to resolve debug group {DEBUG_GROUP_ID}: {e}")
+            # Try to resolve multiple times if needed
+            for attempt in range(3):
+                try:
+                    await self.get_chat(int(DEBUG_GROUP_ID))
+                    logging.info(f"✅ Successfully resolved debug group {DEBUG_GROUP_ID} (Attempt {attempt+1})")
+                    break
+                except Exception as e:
+                    logging.error(f"❌ Resolution attempt {attempt+1} failed for {DEBUG_GROUP_ID}: {e}")
+                    await asyncio.sleep(5)
 
+        # Ensure database is connected before starting loops
+        if not self.db_pool:
+            logging.warning("Waiting for database connection before starting tasks...")
+            for _ in range(5):
+                await asyncio.sleep(2)
+                if self.db_pool:
+                    break
+        
         # Start background tasks
         from src.features.community.scheduler import dm_scheduler_task
         asyncio.create_task(dm_scheduler_task(self))
@@ -483,7 +517,7 @@ class TradingBot(Client):
 
         # Detailed Startup Report
         await self.logger_tool.log_startup_report({
-            'db': '✅ Connected',
+            'db': '✅ Connected' if self.db_pool else '❌ Failed',
             'owner': '✅ Verified',
             'loops': '✅ 8/8 Operational',
             'health': '✅ Port 5000'
@@ -507,15 +541,35 @@ async def main():
     bot = TradingBot()
     try:
         await bot.start_bot()
-        # logging.info("Starting bot client...") # Already started in start_bot
-        # await bot.start()
         await bot.start_bot_complete()
-        await asyncio.Event().wait()
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Stopping bot...")
+        
+        # Keep alive with idle check and reconnect logic
+        while True:
+            try:
+                if not bot.is_connected:
+                    logging.warning("Bot disconnected. Attempting to reconnect...")
+                    await bot.start()
+                    logging.info("Bot reconnected successfully.")
+                else:
+                    # Perform a light API call to ensure session is truly alive and session hasn't timed out
+                    await bot.get_me()
+                    logging.debug("Heartbeat: Bot is still connected.")
+            except Exception as e:
+                logging.error(f"Heartbeat/Reconnect error: {e}")
+                # If we get a persistent connection error, try a fresh start
+                if "connection" in str(e).lower() or "session" in str(e).lower():
+                    try:
+                        await bot.stop()
+                        await asyncio.sleep(2)
+                        await bot.start()
+                    except Exception as restart_err:
+                        logging.error(f"Failed to force restart bot: {restart_err}")
+            
+            await asyncio.sleep(60) # Check every minute
+    except KeyboardInterrupt:
+        await bot.stop_bot()
     except Exception as e:
-        logging.error(f"Fatal error in main: {e}")
-    finally:
+        logging.error(f"Main loop error: {e}")
         await bot.stop_bot()
 
 if __name__ == "__main__":

@@ -14,9 +14,10 @@ async def handle_sendwelcomedm(bot_instance, client: Client, message: Message):
         return
 
     # Store context for this menu session
-    menu_id = f"{int(time.time() * 1000)}"
     if not hasattr(bot_instance, 'sendwelcomedm_context'):
         bot_instance.sendwelcomedm_context = {}
+
+    menu_id = f"{int(time.time() * 1000)}"
     
     bot_instance.sendwelcomedm_context[menu_id] = {
         'stage': 'waiting_for_user_id',

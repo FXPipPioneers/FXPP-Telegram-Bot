@@ -23,8 +23,8 @@ class BackgroundEngine:
         self.loop_tasks = []
     
     async def start(self):
-        """Start all 8 background loops"""
-        logger.info("Starting all background loops...")
+        """Start all 8 background loops and recovery features"""
+        logger.info("Starting all background loops and recovery features...")
         
         try:
             # 1. Price Tracking Loop
@@ -75,7 +75,29 @@ class BackgroundEngine:
             self.loop_tasks.append(task8)
             logger.info("✅ Daily Trial Offer Loop started")
             
-            logger.info("🎉 All 8 background loops successfully started!")
+            # FEATURE IMPLEMENTATIONS ON STARTUP
+            # Feature 1: Missed Signal Recovery
+            from src.features.trading.engine import TradingEngine
+            trading_engine = TradingEngine(self.db.pool, self.app)
+            asyncio.create_task(trading_engine.recover_missed_signals())
+            
+            # Feature 2: Trial Expiry Validation
+            from src.features.community.trial_manager import TrialManager
+            trial_manager = TrialManager(self.db.pool, self.app)
+            asyncio.create_task(trial_manager.validate_and_fix_trial_expiry_times())
+            
+            # Feature 3: Offline Engagement Recovery
+            asyncio.create_task(engagement_loop.recover_offline_engagement())
+            
+            # Feature 4: Active Trial Peer Initialization
+            if hasattr(self.app, 'community_handlers'):
+                asyncio.create_task(self.app.community_handlers.ensure_active_trial_peers())
+            else:
+                from src.features.community.handlers import CommunityHandlers
+                self.app.community_handlers = CommunityHandlers(self.app, self.db.pool, self.app)
+                asyncio.create_task(self.app.community_handlers.ensure_active_trial_peers())
+            
+            logger.info("🎉 All 8 background loops and recovery features successfully started!")
             
         except Exception as e:
             logger.error(f"❌ Error starting background loops: {e}")

@@ -102,7 +102,14 @@ async def show_position_guide(bot_instance, message: Message, is_edit=False):
 def analyze_trade_position(action: str, entry: float, tp1: float,
                            tp2: float, tp3: float, sl: float,
                            current_price: float) -> dict:
-    if action == "BUY":
+    """
+    Feature 11: Fix Sell Position Logic & Color-coded emojis
+    Analyze trade progress and return appropriate status emoji
+    """
+    is_buy = action.upper() == "BUY"
+    
+    if is_buy:
+        # BUY logic: Price goes up = Profit
         if current_price <= sl:
             return {"emoji": "🔴", "position": "At/Below SL"}
         elif current_price <= entry:
@@ -116,19 +123,19 @@ def analyze_trade_position(action: str, entry: float, tp1: float,
         else:
             return {"emoji": "🚀", "position": "Above TP3 - Max Profit"}
     else:
-        # SELL logic
+        # SELL logic: Price goes down = Profit
         if current_price >= sl:
             return {"emoji": "🔴", "position": "At/Above SL"}
         elif current_price >= entry:
             return {"emoji": "🟡", "position": "Above Entry"}
-        elif current_price >= tp1: # SELL: TP1 is lower than entry
-            return {"emoji": "🟠", "position": "Between Entry and TP1"}
-        elif current_price >= tp2: # SELL: TP2 is lower than TP1
-            return {"emoji": "🟢", "position": "Between TP1 and TP2"}
-        elif current_price >= tp3:
-            return {"emoji": "💚", "position": "Between TP2 and TP3"}
-        else:
+        elif current_price <= tp3: # Price reached TP3
             return {"emoji": "🚀", "position": "Below TP3 - Max Profit"}
+        elif current_price <= tp2: # Price reached TP2
+            return {"emoji": "💚", "position": "Between TP2 and TP3"}
+        elif current_price <= tp1: # Price reached TP1
+            return {"emoji": "🟢", "position": "Between TP1 and TP2"}
+        else: # Price is between Entry and TP1
+            return {"emoji": "🟠", "position": "Between Entry and TP1"}
 
 async def handle_activetrades_callback(bot_instance, client: Client, callback_query: CallbackQuery):
     """Handle activetrades widget navigation callbacks"""
