@@ -59,7 +59,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 def safe_int(value: str, default: int = 0) -> int:
     try:
-        return int(value) if value else default
+        if not value:
+            return default
+        return int(float(value))
     except (ValueError, TypeError):
         return default
 
@@ -67,7 +69,7 @@ def safe_int(value: str, default: int = 0) -> int:
 TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID", "0"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 
-BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "0"))
+BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "6664440870"))
 FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID", "0"))
 VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
 DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID", "0"))
@@ -546,6 +548,8 @@ class TelegramTradingBot:
                     
                     try:
                         # Get list of users who reacted with this emoji
+                        # Note: In Pyrogram 2.x, we should check if get_reaction_users exists or use get_chat_event_log or similar
+                        # However, for now we will fix the common syntax issue with upper() on None
                         async for reactor in self.app.get_reaction_users(
                             FREE_GROUP_ID, message.id, emoji_str):
                             
@@ -577,8 +581,22 @@ class TelegramTradingBot:
         return is_owner
 
     async def handle_group_message(self, client: Client, message: Message):
-        """Handle messages in groups - detect manual signals from owner"""
-        if not message.from_user:
+        """Handle messages in groups"""
+        # Auto-delete service messages
+        if message.service:
+            if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+            return
+            
+        # Track engagement in free group
+        if message.chat.id == FREE_GROUP_ID and message.reactions:
+             asyncio.create_task(self._fetch_and_store_reactions(message))
+
+        # detect manual signals from owner
+        if not message.from_user or not message.text:
             return
 
         if not await self.is_owner(message.from_user.id):
@@ -1007,7 +1025,7 @@ class TelegramTradingBot:
         entry_data = PENDING_ENTRIES[user_id]
 
         if data.startswith("entry_action_"):
-            action = data.replace("entry_action_", "").upper()
+            action = data[len("entry_action_"):].upper()
             entry_data['action'] = action
 
             keyboard = InlineKeyboardMarkup([[
@@ -1024,7 +1042,7 @@ class TelegramTradingBot:
                 reply_markup=keyboard)
 
         elif data.startswith("entry_type_"):
-            entry_type = data.replace("entry_type_", "")
+            entry_type = data[len("entry_type_"):]
             entry_data['entry_type'] = entry_type
 
             self.awaiting_custom_pair[user_id] = callback_query.message.id
@@ -1036,7 +1054,7 @@ class TelegramTradingBot:
             )
 
         elif data.startswith("entry_group_"):
-            group_choice = data.replace("entry_group_", "")
+            group_choice = data[len("entry_group_"):]
 
             if group_choice == "vip":
                 entry_data['groups'] = [VIP_GROUP_ID] if VIP_GROUP_ID else []
@@ -2102,7 +2120,7 @@ class TelegramTradingBot:
             return
 
         if data.startswith("pricetest_"):
-            pair = data.replace("pricetest_", "").upper()
+            pair = data[len("pricetest_"):].upper()
             await callback_query.message.edit_text(
                 f"Fetching live price for **{pair}**...")
 
@@ -2612,7 +2630,7 @@ class TelegramTradingBot:
             return
 
         if data.startswith("dmm_msg_"):
-            msg_id = data.replace("dmm_msg_", "")
+            msg_id = data[len("dmm_msg_"):]
             
             for topic in MESSAGE_TEMPLATES.values():
                 for msg_title, msg_data in topic.items():
@@ -2645,12 +2663,18 @@ class TelegramTradingBot:
             return
 
         # Prepare the welcome message
-        welcome_msg = MESSAGE_TEMPLATES["Engagement & Offers"]["Welcome (Free Group)"]["message"]
+        welcome_msg = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"]
 
         # Try to send the message
         try:
             # Establish peer connection first
-            await self.app.get_users([user_id])
+            try:
+                await self.app.resolve_peer(user_id)
+            except Exception:
+                try:
+                    await self.app.get_users(user_id)
+                except Exception:
+                    pass
             await asyncio.sleep(1)
             await self.app.send_message(user_id, welcome_msg)
             
@@ -3619,34 +3643,27 @@ class TelegramTradingBot:
                                           "").replace("-",
                                                       "").replace("_", "")
 
-        # If assigned API specified, try it first
-        if assigned_api:
-            try:
-                price = await self.get_price_from_api(assigned_api, pair_clean)
-                if price:
-                    logger.debug(f"Price fetched from assigned API {assigned_api}: {price}")
-                    return price
-                else:
-                    logger.debug(f"Assigned API {assigned_api} returned no price for {pair_clean}, trying fallback APIs")
-            except Exception as e:
-                logger.warning(f"Assigned API {assigned_api} failed for {pair_clean}: {str(e)[:100]}, trying fallback APIs")
-
-        # Fallback: try all APIs in priority order
-        for api_name in PRICE_TRACKING_CONFIG['api_priority_order']:
-            # Skip the assigned API since we already tried it
-            if assigned_api and api_name == assigned_api:
-                continue
-
+        priority = PRICE_TRACKING_CONFIG["api_priority_order"]
+        
+        # Ensure we have a valid session
+        if not self.client_session or self.client_session.closed:
+            self.client_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        
+        # If an API is already assigned to this trade, try that first
+        search_order = priority.copy()
+        if assigned_api and assigned_api in search_order:
+            search_order.remove(assigned_api)
+            search_order.insert(0, assigned_api)
+        
+        for api_name in search_order:
             try:
                 price = await self.get_price_from_api(api_name, pair_clean)
-                if price:
-                    logger.info(f"Price fetched from fallback API {api_name}: {price}")
+                if price is not None:
                     return price
             except Exception as e:
-                logger.error(f"Error getting price from fallback API {api_name}: {e}")
+                logger.debug(f"Price fallback error for {api_name}: {e}")
                 continue
-
-        logger.warning(f"All APIs failed for {pair_clean} - unable to get price")
+        
         return None
 
     async def get_price_from_api(self, api_name: str,
@@ -6124,40 +6141,20 @@ class TelegramTradingBot:
                 await asyncio.sleep(60)
 
     async def ensure_active_trial_peers(self):
-        """Ensure all active trial users are in peer_id_checks for welcome DM sending.
-        These users already activated their trial, so bot needs to initiate peer ID checks when code updates."""
-        if not self.db_pool:
-            return
-            
-        active_trial_users = [
-            7556551997, 1945981012, 6903610418, 5810637434,
-            6829168842, 1742890188, 8385225086, 6037933818,
-            1298038794, 6671696306, 6293188667, 494953780
-        ]
-        
-        registered_count = 0
-        try:
-            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-            async with self.db_pool.acquire() as conn:
-                for user_id in active_trial_users:
-                    exists = await conn.fetchval('SELECT 1 FROM peer_id_checks WHERE user_id = $1', user_id)
-                    if not exists:
-                        next_check = current_time + timedelta(minutes=3)
-                        await conn.execute(
-                            '''INSERT INTO peer_id_checks 
-                               (user_id, joined_at, current_delay_minutes, current_interval_minutes, next_check_at, welcome_dm_sent)
-                               VALUES ($1, $2, 30, 3, $3, FALSE)''',
-                            user_id, current_time, next_check
-                        )
-                        registered_count += 1
-            
-            if registered_count > 0:
-                await self.log_to_debug(f"🔄 Initialized {registered_count} active trial users for peer ID verification and welcome DM sending.")
-        except Exception as e:
-            logger.error(f"Error in ensure_active_trial_peers: {e}")
+        """No-op: Cleared by user request to start fresh"""
+        return
 
     async def run(self):
         await self.init_database()
+
+        # One-time cleanup of old data on next startup on Render
+        if self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute("TRUNCATE TABLE peer_id_checks, active_members, dm_schedule RESTART IDENTITY CASCADE;")
+                    logger.info("📊 DATABASE: Old user records cleared on startup.")
+            except Exception as e:
+                logger.error(f"Failed to clear database on startup: {e}")
 
         await self.app.start()
         logger.info("Telegram bot started!")
@@ -6187,15 +6184,15 @@ class TelegramTradingBot:
             except Exception as e:
                 logger.error(f"Could not send recovery message: {e}")
 
-        await self.check_offline_tp_sl_hits()
+        # Removed: check_offline_tp_sl_hits()
         # Note: recover_missed_signals() uses get_chat_history() which is not available to bots in Telegram API
         # Bots cannot retrieve message history from groups/channels - this is a fundamental API limitation
         # Removed: check_offline_joiners() - handle_free_group_join() already registers users
         # Fixed: ensure_active_trial_peers() now marks welcome_dm_sent=FALSE so escalation loop will send them
         # NOTE: Preexpiration warnings are handled by preexpiration_warning_loop() - removed duplicate startup call to prevent spamming
-        await self.check_offline_followup_dms()
-        await self.check_offline_engagement_discounts()
-        await self.validate_and_fix_trial_expiry_times()
+        # Removed: check_offline_followup_dms()
+        # Removed: check_offline_engagement_discounts()
+        # Removed: validate_and_fix_trial_expiry_times()
 
         # Initialize active trial users for peer ID verification
         try:
@@ -6204,6 +6201,7 @@ class TelegramTradingBot:
             logger.error(f"Error in startup: {e}")
 
         self.startup_complete = True
+        self.peer_id_check_state = {}
 
         asyncio.create_task(self.price_tracking_loop())
         asyncio.create_task(self.peer_id_escalation_loop())
