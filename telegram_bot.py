@@ -489,6 +489,10 @@ class TelegramTradingBot:
         async def peerid_callback(client, callback_query: CallbackQuery):
             await self.handle_peerid_callback(client, callback_query)
 
+        @self.app.on_callback_query(filters.regex("^at_"))
+        async def active_trades_callback(client, callback_query: CallbackQuery):
+            await self.handle_active_trades_callback(client, callback_query)
+
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest",
@@ -559,14 +563,16 @@ class TelegramTradingBot:
 
     async def is_owner(self, user_id: int) -> bool:
         """Check if user is the bot owner"""
-        if BOT_OWNER_USER_ID == 0:
-            # If owner ID not set, no one is owner
+        # Ensure we're comparing with the correct ID from env
+        owner_id = int(os.getenv("BOT_OWNER_USER_ID", "0"))
+        if owner_id == 0:
             return False
-        is_owner = user_id == BOT_OWNER_USER_ID
-        if not is_owner and BOT_OWNER_USER_ID > 0:
+            
+        is_owner = user_id == owner_id
+        if not is_owner:
             # Log failed owner checks for debugging
             logger.debug(
-                f"Owner check failed: user {user_id} != owner {BOT_OWNER_USER_ID}"
+                f"Owner check failed: user {user_id} != owner {owner_id}"
             )
         return is_owner
 
@@ -1572,22 +1578,33 @@ class TelegramTradingBot:
         if not await self.is_owner(message.from_user.id):
             return
 
-        # Parse subcommand from message text
-        text_parts = message.text.split()
-        subcommand = text_parts[1].lower() if len(text_parts) > 1 else None
+        # Simple widget for the owner
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📊 Show List", callback_data="at_list"),
+                InlineKeyboardButton("📖 Position Guide", callback_data="at_guide")
+            ]
+        ])
         
-        if subcommand == "list":
-            await self.show_active_trades_list(message)
-        elif subcommand == "position" and len(text_parts) > 2 and text_parts[2].lower() == "guide":
-            await self.show_position_guide(message)
-        else:
-            # Show help message with subcommand options
-            help_text = ("**Active Trades Command**\n\n"
-                        "Usage:\n"
-                        "• `/activetrades list` - Show list of active trades with prices\n"
-                        "• `/activetrades position guide` - Show what each color/emoji means")
-            await message.reply(help_text)
-    
+        await message.reply(
+            "**Active Trades System**\n\nSelect an option below to view trade status or understand the indicators:",
+            reply_markup=keyboard
+        )
+
+    async def handle_active_trades_callback(self, client: Client, callback_query: CallbackQuery):
+        user_id = callback_query.from_user.id
+        if not await self.is_owner(user_id):
+            await callback_query.answer("Restricted access.", show_alert=True)
+            return
+
+        data = callback_query.data
+        if data == "at_list":
+            await self.show_active_trades_list(callback_query.message)
+            await callback_query.answer()
+        elif data == "at_guide":
+            await self.show_position_guide(callback_query.message)
+            await callback_query.answer()
+
     async def show_active_trades_list(self, message: Message):
         """Display list of active trades with current prices and positions"""
         trades = PRICE_TRACKING_CONFIG['active_trades']
