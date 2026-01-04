@@ -466,10 +466,6 @@ class TelegramTradingBot:
         async def dm_status_command(client, message: Message):
             await self.handle_dm_status(client, message)
 
-        @self.app.on_message(filters.command("freetrialusers"))
-        async def timed_auto_role_command(client, message: Message):
-            await self.handle_timed_auto_role(client, message)
-
         @self.app.on_message(filters.command("sendwelcomedm"))
         async def send_welcome_dm_command(client, message: Message):
             await self.handle_send_welcome_dm(client, message)
@@ -542,18 +538,31 @@ class TelegramTradingBot:
 
         @self.app.on_message(filters.command("login"))
         async def login_command(client, message: Message):
-            if await self.is_owner(message.from_user.id):
-                keyboard = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("🚀 Setup Userbot", callback_data="login_setup"),
-                        InlineKeyboardButton("📊 Check Status", callback_data="login_status")
-                    ]
-                ])
-                await message.reply(
-                    "**Userbot Login Management System**\n\n"
-                    "Use the buttons below to manage your Userbot session.",
-                    reply_markup=keyboard
-                )
+            if not await self.is_owner(message.from_user.id):
+                return
+            
+            # Use text-based logic for /login setup and /login status
+            parts = message.text.split()
+            if len(parts) > 1:
+                subcommand = parts[1].lower()
+                if subcommand == "setup":
+                    await self.handle_login_setup(client, message)
+                    return
+                elif subcommand == "status":
+                    await self.handle_login_status(client, message)
+                    return
+
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🚀 Setup Userbot", callback_data="login_setup"),
+                    InlineKeyboardButton("📊 Check Status", callback_data="login_status")
+                ]
+            ])
+            await message.reply(
+                "**Userbot Login Management System**\n\n"
+                "Use the buttons below to manage your Userbot session.",
+                reply_markup=keyboard
+            )
 
         @self.app.on_callback_query(filters.regex("^login_"))
         async def login_callback(client, callback_query: CallbackQuery):
@@ -563,21 +572,15 @@ class TelegramTradingBot:
 
             action = callback_query.data.split("_")[1]
             if action == "setup":
-                await callback_query.message.edit_text(
-                    "**Userbot Setup Started**\n\n"
-                    "Please use `/login setup` to begin the interactive login process."
-                )
+                await self.handle_login_setup(client, callback_query.message)
             elif action == "status":
-                await callback_query.message.edit_text(
-                    "**Userbot Status Check**\n\n"
-                    "Please use `/login status` to check the current connection health."
-                )
+                await self.handle_login_status(client, callback_query.message)
             await callback_query.answer()
 
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
                 "entry", "activetrades", "tradeoverride", "pricetest", "login",
-                "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
+                "dbstatus", "dmstatus", "sendwelcomedm", "newmemberslist", "dmmessages"
             ]))
         async def text_input_handler(client, message: Message):
             await self.handle_text_input(client, message)
@@ -1432,7 +1435,40 @@ class TelegramTradingBot:
         )
 
     async def handle_text_input(self, client: Client, message: Message):
+        """Handle user input"""
         user_id = message.from_user.id
+
+        # 1. Handle code input for Userbot login
+        if hasattr(self, 'awaiting_login_code') and self.awaiting_login_code:
+            code = message.text.strip()
+            if len(code) == 5 and code.isdigit():
+                try:
+                    login_data = self.awaiting_login_code
+                    temp_client = login_data["temp_client"]
+                    
+                    await temp_client.sign_in(
+                        login_data["phone_number"],
+                        login_data["phone_code_hash"],
+                        code
+                    )
+                    
+                    session_string = await temp_client.export_session_string()
+                    
+                    async with self.db_pool.acquire() as conn:
+                        # Ensure bot_settings table exists
+                        await conn.execute("CREATE TABLE IF NOT EXISTS bot_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
+                        await conn.execute("""
+                            INSERT INTO bot_settings (setting_key, setting_value)
+                            VALUES ('userbot_session_string', $1)
+                            ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1
+                        """, session_string)
+                    
+                    await message.reply("✅ **Userbot Authenticated Successfully!**\nThe session has been saved. The Userbot service will now use this session.")
+                    self.awaiting_login_code = None
+                    await temp_client.disconnect()
+                except Exception as e:
+                    await message.reply(f"❌ **Sign-in Failed**: {str(e)}")
+                return
 
         if not await self.is_owner(user_id):
             # Send support message to non-owners
@@ -4430,6 +4466,62 @@ class TelegramTradingBot:
                     f"Failed to send breakeven notification without reply: {e2}"
                 )
 
+    async def handle_login_setup(self, client, message: Message):
+        """Initiate the Userbot login process"""
+        if not await self.is_owner(message.from_user.id if message.from_user else BOT_OWNER_USER_ID):
+            return
+
+        try:
+            # We use a temporary client to get the phone code
+            temp_client = Client(
+                "temp_login",
+                api_id=TELEGRAM_API_ID,
+                api_hash=TELEGRAM_API_HASH,
+                in_memory=True
+            )
+            await temp_client.connect()
+            
+            # Note: In a real production environment, you'd handle phone number entry here
+            # For this specific bot, we assume the environment variable USERBOT_PHONE is set
+            phone_number = os.getenv("USERBOT_PHONE")
+            if not phone_number:
+                await message.reply("❌ Error: `USERBOT_PHONE` environment variable not set.")
+                return
+
+            sent_code = await temp_client.send_code(phone_number)
+            self.awaiting_login_code = {
+                "phone_number": phone_number,
+                "phone_code_hash": sent_code.phone_code_hash,
+                "temp_client": temp_client
+            }
+            
+            await message.reply(
+                f"📟 **Login Code Sent** to `{phone_number}`\n\n"
+                "Please reply to this message with the 5-digit code you received."
+            )
+        except Exception as e:
+            logger.error(f"Login setup error: {e}")
+            await message.reply(f"❌ **Login Setup Failed**: {str(e)}")
+
+    async def handle_login_status(self, client, message: Message):
+        """Check the status of the Userbot service"""
+        if not self.db_pool:
+            await message.reply("❌ Database connection not available.")
+            return
+
+        try:
+            async with self.db_pool.acquire() as conn:
+                session = await conn.fetchval(
+                    "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
+                )
+            
+            if not session:
+                await message.reply("🔴 **Userbot Status**: Disconnected (No session found).")
+            else:
+                await message.reply("🟢 **Userbot Status**: Connected (Session exists in database).")
+        except Exception as e:
+            await message.reply(f"❌ Error checking status: {str(e)}")
+
     async def init_database(self):
         try:
             database_url = os.getenv('DATABASE_URL')
@@ -5914,7 +6006,6 @@ class TelegramTradingBot:
                     BotCommand("tradeoverride", "Override trade status (menu)"),
                     BotCommand("pricetest", "Test live price for a pair"),
                     BotCommand("login", "Userbot login/setup (setup|status)"),
-                    BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
                     BotCommand("dmmessages", "Preview DM message templates"),
