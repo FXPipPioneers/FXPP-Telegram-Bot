@@ -427,18 +427,49 @@ class TelegramTradingBot:
         self.peer_id_check_state = {}  # Track peer ID checks: user_id -> {joined_at, delay_level, interval, established}
 
         self._register_handlers()
+        self._setup_all_handlers()
 
     async def start(self):
         """Main startup logic"""
         await self._register_commands()
-        # ... rest of startup logic
+        
+        # Initialize database pool
+        if not self.db_pool:
+            try:
+                self.db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"))
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute('''
+                        CREATE TABLE IF NOT EXISTS bot_settings (
+                            key TEXT PRIMARY KEY,
+                            value TEXT
+                        )
+                    ''')
+                print("✅ Database pool and settings table initialized")
+            except Exception as e:
+                print(f"❌ Database initialization failed: {e}")
+
+        # Try to restore userbot session
+        if self.userbot and self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    row = await conn.fetchrow("SELECT value FROM bot_settings WHERE key = 'userbot_session_string'")
+                    if row and row['value']:
+                        print("🔄 Found saved userbot session string, attempting to restore...")
+                        # Pyrogram Client doesn't natively support session_string in __init__ for existing instances 
+                        # easily without recreating, but we can check connection
+                        if not self.userbot.is_connected:
+                            await self.userbot.connect()
+                            if await self.userbot.get_me():
+                                print("✅ Userbot session restored successfully")
+            except Exception as e:
+                print(f"⚠️ Failed to restore userbot session: {e}")
 
     async def _register_commands(self):
         """Set the bot's command list in Telegram menu"""
         commands = [
             BotCommand("entry", "Post a new trade signal"),
             BotCommand("activetrades", "Show all active trades"),
-            BotCommand("login", "Manage userbot connection"),
+            BotCommand("login", "Manage userbot (setup/status)"),
             BotCommand("dbstatus", "Check database connection"),
             BotCommand("dmstatus", "Check DM delivery status"),
             BotCommand("freetrialusers", "Manage VIP trials"),
@@ -530,6 +561,7 @@ class TelegramTradingBot:
         except Exception as e:
             await message.reply(f"❌ Error starting login: {e}")
 
+    def _setup_all_handlers(self):
         @self.app.on_message(filters.user(BOT_OWNER_USER_ID) & filters.private & filters.text)
         async def handle_owner_input(client, message: Message):
             if message.from_user.id in self.awaiting_login_code:
@@ -538,6 +570,19 @@ class TelegramTradingBot:
                     if self.userbot:
                         await self.userbot.sign_in(USERBOT_PHONE, code_hash, message.text)
                         
+                        # Save session string to database for persistence
+                        try:
+                            session_string = await self.userbot.export_session_string()
+                            async with self.db_pool.acquire() as conn:
+                                await conn.execute(
+                                    "INSERT INTO bot_settings (key, value) VALUES ('userbot_session_string', $1) "
+                                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                                    session_string
+                                )
+                            print("✅ Userbot session string saved to database")
+                        except Exception as e:
+                            print(f"⚠️ Failed to save session string: {e}")
+
                         # Register auto-reply handler for userbot after successful login
                         @self.userbot.on_message(filters.private & ~filters.me)
                         async def userbot_support_reply(client: Client, msg: Message):
