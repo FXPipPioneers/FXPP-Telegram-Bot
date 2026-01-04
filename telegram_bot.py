@@ -396,20 +396,21 @@ class TelegramTradingBot:
         
         # Userbot client
         self.userbot = None
-        if USERBOT_PHONE and USERBOT_API_ID and USERBOT_API_HASH:
-            self.userbot = Client(
-                "userbot_session",
-                api_id=USERBOT_API_ID,
-                api_hash=USERBOT_API_HASH,
-                phone_number=USERBOT_PHONE,
-                workdir="."
-            )
-            print("🤖 Userbot client initialized (requires /login to start)")
-
-            # Define userbot_support_reply logic once at initialization if possible, 
-            # or ensure it's handled safely in the sign_in flow.
-            # To avoid "is not a known member of None" LSP errors, 
-            # we ensure the type checker knows self.userbot is not None in those scopes.
+        if USERBOT_PHONE and USERBOT_API_ID != 0 and USERBOT_API_HASH:
+            try:
+                self.userbot = Client(
+                    "userbot_session",
+                    api_id=USERBOT_API_ID,
+                    api_hash=USERBOT_API_HASH,
+                    phone_number=USERBOT_PHONE,
+                    workdir="."
+                )
+                print("🤖 Userbot client initialized (requires /login to start)")
+            except Exception as e:
+                print(f"⚠️ Userbot initialization failed: {e}")
+                self.userbot = None
+        else:
+            print("ℹ️ Userbot not configured. DMs will use standard Bot API.")
 
         self.db_pool = None
         self.client_session = None
