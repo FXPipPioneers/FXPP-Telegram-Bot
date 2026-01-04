@@ -363,6 +363,18 @@ MESSAGE_TEMPLATES = {
 }
 
 
+USERBOT_PHONE = os.getenv("USERBOT_PHONE", "")
+USERBOT_API_ID = safe_int(os.getenv("USERBOT_API_ID", "0"))
+USERBOT_API_HASH = os.getenv("USERBOT_API_HASH", "")
+
+if USERBOT_PHONE:
+    print(f"✅ Userbot phone loaded")
+if USERBOT_API_ID:
+    print(f"✅ Userbot API ID loaded")
+if USERBOT_API_HASH:
+    print(f"✅ Userbot API Hash loaded")
+
+
 class TelegramTradingBot:
 
     def __init__(self):
@@ -379,7 +391,27 @@ class TelegramTradingBot:
         self.app = Client("trading_bot",
                           api_id=TELEGRAM_API_ID,
                           api_hash=TELEGRAM_API_HASH,
-                          bot_token=TELEGRAM_BOT_TOKEN)
+                          bot_token=TELEGRAM_BOT_TOKEN,
+                          workdir=".") # Fix 2: Session storage enabled by providing workdir
+        
+        # Userbot client
+        self.userbot = None
+        if USERBOT_PHONE and USERBOT_API_ID != 0 and USERBOT_API_HASH:
+            try:
+                self.userbot = Client(
+                    "userbot_session",
+                    api_id=USERBOT_API_ID,
+                    api_hash=USERBOT_API_HASH,
+                    phone_number=USERBOT_PHONE,
+                    workdir="."
+                )
+                print("🤖 Userbot client initialized (requires /login to start)")
+            except Exception as e:
+                print(f"⚠️ Userbot initialization failed: {e}")
+                self.userbot = None
+        else:
+            print("ℹ️ Userbot not configured. DMs will use standard Bot API.")
+
         self.db_pool = None
         self.client_session = None
         self.last_online_time = None
@@ -387,6 +419,7 @@ class TelegramTradingBot:
         self.startup_complete = False
         self.awaiting_price_input = {}
         self.awaiting_custom_pair = {}
+        self.awaiting_login_code = {} # user_id -> phone_code_hash
         self.override_trade_mappings = {}  # menu_id -> {idx: message_id}
         self.trial_pending_approvals = set(
         )  # Track user IDs approved for trial
@@ -394,9 +427,165 @@ class TelegramTradingBot:
         self.peer_id_check_state = {}  # Track peer ID checks: user_id -> {joined_at, delay_level, interval, established}
 
         self._register_handlers()
+        self._setup_all_handlers()
+
+    async def start(self):
+        """Main startup logic"""
+        await self._register_commands()
+        
+        # Initialize database pool
+        if not self.db_pool:
+            try:
+                self.db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"))
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute('''
+                        CREATE TABLE IF NOT EXISTS bot_settings (
+                            key TEXT PRIMARY KEY,
+                            value TEXT
+                        )
+                    ''')
+                print("✅ Database pool and settings table initialized")
+            except Exception as e:
+                print(f"❌ Database initialization failed: {e}")
+
+        # Try to restore userbot session
+        if self.userbot and self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    row = await conn.fetchrow("SELECT value FROM bot_settings WHERE key = 'userbot_session_string'")
+                    if row and row['value']:
+                        print("🔄 Found saved userbot session string, attempting to restore...")
+                        # Pyrogram Client doesn't natively support session_string in __init__ for existing instances 
+                        # easily without recreating, but we can check connection
+                        if not self.userbot.is_connected:
+                            await self.userbot.connect()
+                            if await self.userbot.get_me():
+                                print("✅ Userbot session restored successfully")
+            except Exception as e:
+                print(f"⚠️ Failed to restore userbot session: {e}")
+
+    async def _register_commands(self):
+        """Set the bot's command list in Telegram menu"""
+        commands = [
+            BotCommand("entry", "Post a new trade signal"),
+            BotCommand("activetrades", "Show all active trades"),
+            BotCommand("login", "Manage userbot (setup/status)"),
+            BotCommand("dbstatus", "Check database connection"),
+            BotCommand("dmstatus", "Check DM delivery status"),
+            BotCommand("freetrialusers", "Manage VIP trials"),
+            BotCommand("peeridstatus", "Check Peer ID verification status"),
+            BotCommand("newmemberslist", "List recently joined members"),
+            BotCommand("dmmessages", "Manage automated DM templates")
+        ]
+        try:
+            # Clear old commands first
+            await self.app.delete_bot_commands(scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
+            
+            # Set commands for the bot owner only
+            await self.app.set_bot_commands(
+                commands,
+                scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID)
+            )
+            print("✅ Bot commands registered in menu for owner")
+        except Exception as e:
+            print(f"⚠️ Failed to register bot commands: {e}")
 
     def _register_handlers(self):
+        # Empty this out entirely as we're moving everything to _setup_all_handlers
+        pass
 
+    def _setup_all_handlers(self):
+        # 1. Login Command (with subcommands)
+        @self.app.on_message(filters.command("login") & filters.user(BOT_OWNER_USER_ID))
+        async def login_command(client, message: Message):
+            if not self.userbot:
+                await message.reply("❌ Userbot credentials not configured in environment variables.")
+                return
+            
+            args = message.command
+            if len(args) > 1:
+                subcommand = args[1].lower()
+                if subcommand == "status":
+                    await self._handle_userbot_status(message)
+                    return
+                elif subcommand == "setup":
+                    await self._handle_userbot_setup(message)
+                    return
+
+            # Default: Show widget
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📲 Setup Login", callback_data="login_setup"),
+                    InlineKeyboardButton("📊 Check Status", callback_data="login_status")
+                ]
+            ])
+            await message.reply(
+                "🤖 **Userbot Management**\n\n"
+                "Select an option below to manage your userbot connection:",
+                reply_markup=keyboard
+            )
+
+        # 2. Login Callbacks
+        @self.app.on_callback_query(filters.regex("^login_") & filters.user(BOT_OWNER_USER_ID))
+        async def login_callback(client, callback_query: CallbackQuery):
+            data = callback_query.data
+            if data == "login_setup":
+                await self._handle_userbot_setup(callback_query.message)
+            elif data == "login_status":
+                await self._handle_userbot_status(callback_query.message)
+            await callback_query.answer()
+
+        # 3. Status Command (Redirect to login status logic)
+        @self.app.on_message(filters.command("status") & filters.user(BOT_OWNER_USER_ID))
+        async def status_command(client, message: Message):
+            await self._handle_userbot_status(message)
+
+        # 4. Userbot Login Code Handler (Owner input)
+        @self.app.on_message(filters.user(BOT_OWNER_USER_ID) & filters.private & filters.text)
+        async def handle_owner_input(client, message: Message):
+            if message.from_user.id in self.awaiting_login_code:
+                code_hash = self.awaiting_login_code.pop(message.from_user.id)
+                try:
+                    if self.userbot:
+                        await self.userbot.sign_in(USERBOT_PHONE, code_hash, message.text)
+                        
+                        # Save session string to database for persistence
+                        try:
+                            session_string = await self.userbot.export_session_string()
+                            async with self.db_pool.acquire() as conn:
+                                await conn.execute(
+                                    "INSERT INTO bot_settings (key, value) VALUES ('userbot_session_string', $1) "
+                                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                                    session_string
+                                )
+                            print("✅ Userbot session string saved to database")
+                        except Exception as e:
+                            print(f"⚠️ Failed to save session string: {e}")
+
+                        # Register auto-reply handler for userbot after successful login
+                        @self.userbot.on_message(filters.private & ~filters.me)
+                        async def userbot_support_reply(client: Client, msg: Message):
+                            support_text = (
+                                "This is a private trading bot that can only be used by members of the FX Pip Pioneers team.\n\n\n"
+                                "If you need support or have questions, please contact @fx_pippioneers."
+                            )
+                            try:
+                                await msg.reply(support_text)
+                            except Exception as e:
+                                logger.error(f"Error sending support reply from Userbot: {e}")
+                        
+                        await message.reply("✅ Userbot successfully logged in and ready!")
+                        await self.log_to_debug("🤖 **Userbot Status**: Successfully logged in and active.")
+                    else:
+                        await message.reply("❌ Userbot client not initialized correctly.")
+                except Exception as e:
+                    await message.reply(f"❌ Login failed: {e}")
+                return
+            
+            # If not a login code, pass to general text input handler
+            await self.handle_text_input(client, message)
+
+        # 5. Core Trading Commands
         @self.app.on_message(filters.command("entry"))
         async def entry_command(client, message: Message):
             await self.handle_entry(client, message)
@@ -413,6 +602,7 @@ class TelegramTradingBot:
         async def price_test_command(client, message: Message):
             await self.handle_price_test(client, message)
 
+        # 6. Database & Status Commands
         @self.app.on_message(filters.command("dbstatus"))
         async def db_status_command(client, message: Message):
             await self.handle_db_status(client, message)
@@ -421,6 +611,7 @@ class TelegramTradingBot:
         async def dm_status_command(client, message: Message):
             await self.handle_dm_status(client, message)
 
+        # 7. Management Commands
         @self.app.on_message(filters.command("freetrialusers"))
         async def timed_auto_role_command(client, message: Message):
             await self.handle_timed_auto_role(client, message)
@@ -441,15 +632,16 @@ class TelegramTradingBot:
         async def peeridstatus_command(client, message: Message):
             await self.handle_peer_id_status(client, message)
 
+        # 8. Event Handlers
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
             await self.process_join_request(client, join_request)
 
         @self.app.on_chat_member_updated()
-        async def handle_member_update(client,
-                                       member_update: ChatMemberUpdated):
+        async def handle_member_update(client, member_update: ChatMemberUpdated):
             await self.process_member_update(client, member_update)
 
+        # 9. Callback Logic (Remaining)
         @self.app.on_callback_query(filters.regex("^entry_"))
         async def entry_callback(client, callback_query: CallbackQuery):
             await self.handle_entry_callback(client, callback_query)
@@ -459,8 +651,7 @@ class TelegramTradingBot:
             await self.handle_override_callback(client, callback_query)
 
         @self.app.on_callback_query(filters.regex("^tar_"))
-        async def timedautorole_callback(client,
-                                         callback_query: CallbackQuery):
+        async def timedautorole_callback(client, callback_query: CallbackQuery):
             await self.handle_timedautorole_callback(client, callback_query)
 
         @self.app.on_callback_query(filters.regex("^pricetest_"))
@@ -495,14 +686,7 @@ class TelegramTradingBot:
         async def active_trades_callback(client, callback_query: CallbackQuery):
             await self.handle_active_trades_callback(client, callback_query)
 
-        @self.app.on_message(
-            filters.private & filters.text & ~filters.command([
-                "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
-            ]))
-        async def text_input_handler(client, message: Message):
-            await self.handle_text_input(client, message)
-
+        # 10. General Group Handlers
         @self.app.on_message(filters.group & filters.text & ~filters.command([
             "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
             "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
@@ -512,26 +696,19 @@ class TelegramTradingBot:
 
         @self.app.on_message(filters.group & filters.service)
         async def delete_service_messages(client, message: Message):
-            """Auto-delete all service messages from VIP and FREE groups"""
             if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
                 try:
                     await message.delete()
-                except Exception as e:
-                    logger.debug(f"Could not delete service message: {e}")
+                except Exception:
+                    pass
 
-        @self.app.on_message(filters=filters.group)
+        @self.app.on_message(filters.group)
         async def handle_group_reaction_update(client, message: Message):
-            """Track emoji reactions in free group for engagement scoring"""
-            if message.chat.id != FREE_GROUP_ID or not message.reactions:
-                return
-            
-            if not self.db_pool:
-                return
-            
-            try:
-                asyncio.create_task(self._fetch_and_store_reactions(message))
-            except Exception as e:
-                logger.debug(f"Error scheduling reaction fetch: {e}")
+            if message.chat.id == FREE_GROUP_ID and message.reactions:
+                try:
+                    asyncio.create_task(self._fetch_and_store_reactions(message))
+                except Exception:
+                    pass
 
     async def _fetch_and_store_reactions(self, message: Message):
         """Fetch actual users who reacted and store individually for engagement tracking"""
@@ -1347,6 +1524,38 @@ class TelegramTradingBot:
         await self.log_to_debug(
             f"New {entry_type} signal created: {pair} {action} @ {entry_price} - sent to {sent_count} channels"
         )
+
+    async def send_dm(self, user_id: int, text: str, reply_markup=None) -> bool:
+        """Centralized helper to send DMs, preferentially using the Userbot"""
+        # Try Userbot first if available and authorized
+        if self.userbot and self.userbot.is_connected:
+            max_retries = 4
+            for attempt in range(max_retries):
+                try:
+                    await self.userbot.send_message(user_id, text)
+                    logger.info(f"✅ DM sent to {user_id} via Userbot (attempt {attempt + 1})")
+                    return True
+                except FloodWait as e:
+                    logger.warning(f"⏳ Userbot FloodWait for {e.value}s on attempt {attempt + 1}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(e.value)
+                    else:
+                        await self.log_to_debug(f"⏳ **Userbot FloodWait**: Userbot is rate-limited for {e.value}s. Falling back to Bot API.")
+                except Exception as e:
+                    logger.warning(f"⚠️ Userbot attempt {attempt + 1} failed for {user_id}: {e}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(300) # Wait 5 minutes before retry instead of 1
+                    else:
+                        await self.log_to_debug(f"⚠️ **Userbot Warning**: Failed to send DM to `{user_id}` after {max_retries} attempts. Error: {e}. Falling back to Bot API.")
+        
+        # Fallback to Bot API (the normal bot)
+        try:
+            await self.app.send_message(user_id, text, reply_markup=reply_markup)
+            logger.info(f"✅ DM sent to {user_id} via Bot API")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Both Userbot and Bot API failed for {user_id}: {e}")
+            return False
 
     async def handle_text_input(self, client: Client, message: Message):
         user_id = message.from_user.id
@@ -2676,7 +2885,7 @@ class TelegramTradingBot:
                 except Exception:
                     pass
             await asyncio.sleep(1)
-            await self.app.send_message(user_id, welcome_msg)
+            await self.send_dm(user_id, welcome_msg)
             
             # ✅ SYNC WITH PEER_ID_CHECKS TABLE
             if self.db_pool:
@@ -3457,6 +3666,15 @@ class TelegramTradingBot:
         if self.db_pool:
             try:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                
+                # FIX 1: Forced Resolution - Immediately try to get member info to prime cache
+                try:
+                    await client.get_chat_member(FREE_GROUP_ID, user.id)
+                    # ALSO immediately attempt to establish a Peer ID globally
+                    await client.get_users([user.id])
+                except Exception as e:
+                    logger.debug(f"Forced resolution/global fetch failed for {user.id}: {e}")
+
                 async with self.db_pool.acquire() as conn:
                     # Track for engagement
                     await conn.execute(
@@ -5196,9 +5414,12 @@ class TelegramTradingBot:
     async def check_peer_id_established(self, user_id: int) -> bool:
         """Attempt to verify peer ID is established by checking if we can interact with the user"""
         try:
+            # Feature 1: Global Resolve - try to fetch user details from Telegram servers
+            # This is the most reliable way to get the access hash
             await self.app.get_users([user_id])
             return True
         except Exception:
+            # Feature 3: Wait strategy is handled by the escalation loop calling this
             return False
 
     async def escalate_peer_id_check(self, delay_level: int) -> tuple:
@@ -5272,21 +5493,19 @@ class TelegramTradingBot:
                                 try:
                                     user_data = await self.app.get_users([user_id])
                                     first_name = user_data[0].first_name if user_data else "Trader"
-                                    welcome_dm = MESSAGE_TEMPLATES["Engagement & Offers"]["Welcome (Free Group)"]["message"]
-                                    await self.app.send_message(user_id, welcome_dm)
+                                    
+                                    # Fix: Use correct nested dictionary keys for Welcome DM
+                                    welcome_dm = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"]
+                                    # Optional: replace {user_name} if template uses it
+                                    welcome_dm = welcome_dm.replace("{user_name}", first_name)
+                                    
+                                    await self.send_dm(user_id, welcome_dm)
                                     await conn.execute('UPDATE peer_id_checks SET welcome_dm_sent = TRUE WHERE user_id = $1', user_id)
                                     await self.log_to_debug(f"✅ Welcome DM successfully sent to {first_name} (ID: {user_id}) - Peer ID established after {time_elapsed:.1f} hours", user_id=user_id)
                                 except Exception as e:
                                     error_msg = str(e)
-                                    # 🔧 HANDLE PEER_ID_INVALID: Reset peer_id_established so system can retry
-                                    if "PEER_ID_INVALID" in error_msg:
-                                        await conn.execute('''
-                                            UPDATE peer_id_checks SET peer_id_established = FALSE
-                                            WHERE user_id = $1
-                                        ''', user_id)
-                                        await self.log_to_debug(f"⚠️ Peer ID became invalid for user {user_id}. Resetting to attempt recovery.", is_error=True, user_id=user_id)
-                                    else:
-                                        await self.log_to_debug(f"❌ Peer ID established for user {user_id} but welcome DM failed: {e}", is_error=True, user_id=user_id)
+                                    # Handle errors gracefully without resetting established status
+                                    await self.log_to_debug(f"❌ Peer ID established for user {user_id} but welcome DM failed: {e}", is_error=True, user_id=user_id)
                             else:
                                 # Still not established - schedule next check based on delay progression
                                 delay_mins = row['current_delay_minutes']
@@ -5718,7 +5937,7 @@ class TelegramTradingBot:
     async def send_24hr_warning(self, member_id: str):
         try:
             message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["24-Hour Warning"]["message"]
-            await self.app.send_message(int(member_id), message)
+            await self.send_dm(int(member_id), message)
             logger.info(f"✅ Sent 24-hour trial warning DM to user {member_id}")
             await self.log_to_debug(f"✅ Sent 24-hour trial warning DM to user {member_id}", user_id=int(member_id))
         except Exception as e:
@@ -5733,7 +5952,7 @@ class TelegramTradingBot:
     async def send_3hr_warning(self, member_id: str):
         try:
             message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["3-Hour Warning"]["message"]
-            await self.app.send_message(int(member_id), message)
+            await self.send_dm(int(member_id), message)
             logger.info(f"✅ Sent 3-hour trial warning DM to user {member_id}")
             await self.log_to_debug(f"✅ Sent 3-hour trial warning DM to user {member_id}", user_id=int(member_id))
         except Exception as e:
@@ -5837,7 +6056,7 @@ class TelegramTradingBot:
                             # Resolve peer and send
                             await self.app.get_users([user_id])
                             await asyncio.sleep(1)
-                            await self.app.send_message(user_id, final_message)
+                            await self.send_dm(user_id, final_message)
                             
                             # Track when we sent this warning
                             self.last_warning_send_time[user_id] = current_time
@@ -5907,7 +6126,7 @@ class TelegramTradingBot:
             else:
                 return
 
-            await self.app.send_message(int(member_id), message)
+            await self.send_dm(int(member_id), message)
             logger.info(f"✅ Sent {days}-day follow-up DM to user {member_id}")
             await self.log_to_debug(f"✅ Sent {days}-day follow-up DM to user {member_id}", user_id=int(member_id))
         except Exception as e:
@@ -5941,8 +6160,7 @@ class TelegramTradingBot:
                                             'monday_notification_sent', False):
                                 try:
                                     activation_message = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Monday Activation (Weekend Delay)"]["message"]
-                                    await self.app.send_message(
-                                        int(member_id), activation_message)
+                                    await self.send_dm(int(member_id), activation_message)
                                     logger.info(
                                         f"✅ Sent Monday activation DM to {member_id}"
                                     )
@@ -5974,6 +6192,8 @@ class TelegramTradingBot:
                     BotCommand("activetrades", "View active trading signals"),
                     BotCommand("tradeoverride", "Override trade status (menu)"),
                     BotCommand("pricetest", "Test live price for a pair"),
+                    BotCommand("login", "Manage userbot (setup/status)"),
+                    BotCommand("status", "Check userbot connection status"),
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
@@ -6111,7 +6331,7 @@ class TelegramTradingBot:
                                 offer_message = MESSAGE_TEMPLATES["Engagement & Offers"]["Daily VIP Trial Offer"]["message"]
                                 
                                 try:
-                                    await self.app.send_message(user_id, offer_message)
+                                    await self.send_dm(user_id, offer_message)
                                     
                                     async with self.db_pool.acquire() as conn:
                                         await conn.execute(
@@ -6159,6 +6379,7 @@ class TelegramTradingBot:
         await self.app.start()
         logger.info("Telegram bot started!")
 
+        # Set up command list in menu
         await self.register_bot_commands()
 
         if DEBUG_GROUP_ID:
