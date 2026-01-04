@@ -5296,15 +5296,8 @@ class TelegramTradingBot:
                                     await self.log_to_debug(f"✅ Welcome DM successfully sent to {first_name} (ID: {user_id}) - Peer ID established after {time_elapsed:.1f} hours", user_id=user_id)
                                 except Exception as e:
                                     error_msg = str(e)
-                                    # 🔧 HANDLE PEER_ID_INVALID: Reset peer_id_established so system can retry
-                                    if "PEER_ID_INVALID" in error_msg:
-                                        await conn.execute('''
-                                            UPDATE peer_id_checks SET peer_id_established = FALSE
-                                            WHERE user_id = $1
-                                        ''', user_id)
-                                        await self.log_to_debug(f"⚠️ Peer ID became invalid for user {user_id}. Resetting to attempt recovery.", is_error=True, user_id=user_id)
-                                    else:
-                                        await self.log_to_debug(f"❌ Peer ID established for user {user_id} but welcome DM failed: {e}", is_error=True, user_id=user_id)
+                                    # Handle errors gracefully without resetting established status
+                                    await self.log_to_debug(f"❌ Peer ID established for user {user_id} but welcome DM failed: {e}", is_error=True, user_id=user_id)
                             else:
                                 # Still not established - schedule next check based on delay progression
                                 delay_mins = row['current_delay_minutes']
