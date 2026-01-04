@@ -490,10 +490,6 @@ class TelegramTradingBot:
         except Exception as e:
             print(f"⚠️ Failed to register bot commands: {e}")
 
-    def _register_handlers(self):
-        # Empty this out entirely as we're moving everything to _setup_all_handlers
-        pass
-
     def _setup_all_handlers(self):
         # 1. Login Command (with subcommands)
         @self.app.on_message(filters.command("login") & filters.user(BOT_OWNER_USER_ID))
@@ -535,14 +531,13 @@ class TelegramTradingBot:
                 await self._handle_userbot_status(callback_query.message)
             await callback_query.answer()
 
-        # 3. Status Command (Redirect to login status logic)
-        @self.app.on_message(filters.command("status") & filters.user(BOT_OWNER_USER_ID))
-        async def status_command(client, message: Message):
-            await self._handle_userbot_status(message)
-
-        # 4. Userbot Login Code Handler (Owner input)
+        # 3. Userbot Login Code Handler (Owner input)
         @self.app.on_message(filters.user(BOT_OWNER_USER_ID) & filters.private & filters.text)
         async def handle_owner_input(client, message: Message):
+            # Check for specific command-like inputs first
+            if message.text.startswith("/"):
+                return
+            
             if message.from_user.id in self.awaiting_login_code:
                 code_hash = self.awaiting_login_code.pop(message.from_user.id)
                 try:
@@ -562,30 +557,133 @@ class TelegramTradingBot:
                         except Exception as e:
                             print(f"⚠️ Failed to save session string: {e}")
 
-                        # Register auto-reply handler for userbot after successful login
-                        @self.userbot.on_message(filters.private & ~filters.me)
-                        async def userbot_support_reply(client: Client, msg: Message):
-                            support_text = (
-                                "This is a private trading bot that can only be used by members of the FX Pip Pioneers team.\n\n\n"
-                                "If you need support or have questions, please contact @fx_pippioneers."
-                            )
-                            try:
-                                await msg.reply(support_text)
-                            except Exception as e:
-                                logger.error(f"Error sending support reply from Userbot: {e}")
-                        
-                        await message.reply("✅ Userbot successfully logged in and ready!")
-                        await self.log_to_debug("🤖 **Userbot Status**: Successfully logged in and active.")
-                    else:
-                        await message.reply("❌ Userbot client not initialized correctly.")
+                        await message.reply("✅ Userbot logged in successfully!")
                 except Exception as e:
                     await message.reply(f"❌ Login failed: {e}")
                 return
-            
-            # If not a login code, pass to general text input handler
+
+            # Fallback for other text inputs (like price inputs)
             await self.handle_text_input(client, message)
 
-        # 5. Core Trading Commands
+        # 4. Standard Commands
+        @self.app.on_message(filters.command("entry") & filters.user(BOT_OWNER_USER_ID))
+        async def entry_command(client, message: Message):
+            await self.handle_entry(client, message)
+
+        @self.app.on_message(filters.command("activetrades") & filters.user(BOT_OWNER_USER_ID))
+        async def active_trades_command(client, message: Message):
+            await self.handle_active_trades(client, message)
+
+        @self.app.on_message(filters.command("dbstatus") & filters.user(BOT_OWNER_USER_ID))
+        async def db_status_command(client, message: Message):
+            await self.handle_db_status(client, message)
+
+        @self.app.on_message(filters.command("dmstatus") & filters.user(BOT_OWNER_USER_ID))
+        async def dm_status_command(client, message: Message):
+            await self.handle_dm_status(client, message)
+
+        @self.app.on_message(filters.command("freetrialusers") & filters.user(BOT_OWNER_USER_ID))
+        async def timed_auto_role_command(client, message: Message):
+            await self.handle_timed_auto_role(client, message)
+
+        @self.app.on_message(filters.command("newmemberslist") & filters.user(BOT_OWNER_USER_ID))
+        async def newmemberslist_command(client, message: Message):
+            await self.handle_newmemberslist(client, message)
+
+        @self.app.on_message(filters.command("dmmessages") & filters.user(BOT_OWNER_USER_ID))
+        async def dmmessages_command(client, message: Message):
+            await self.handle_dmmessages(client, message)
+
+        @self.app.on_message(filters.command("peeridstatus") & filters.user(BOT_OWNER_USER_ID))
+        async def peeridstatus_command(client, message: Message):
+            await self.handle_peer_id_status(client, message)
+
+        # 5. Global Handlers (Join/Member updates/Callbacks)
+        @self.app.on_chat_join_request()
+        async def handle_join_request(client, join_request: ChatJoinRequest):
+            await self.process_join_request(client, join_request)
+
+        @self.app.on_chat_member_updated()
+        async def handle_member_update(client, member_update: ChatMemberUpdated):
+            await self.process_member_update(client, member_update)
+
+        @self.app.on_callback_query(filters.regex("^entry_"))
+        async def entry_callback(client, callback_query: CallbackQuery):
+            await self.handle_entry_callback(client, callback_query)
+
+        @self.app.on_callback_query(filters.regex("^tar_"))
+        async def timedautorole_callback(client, callback_query: CallbackQuery):
+            await self.handle_timedautorole_callback(client, callback_query)
+
+        @self.app.on_callback_query(filters.regex("^pid_"))
+        async def peerid_callback(client, callback_query: CallbackQuery):
+            await self.handle_peerid_callback(client, callback_query)
+
+        @self.app.on_callback_query(filters.regex("^at_"))
+        async def active_trades_callback(client, callback_query: CallbackQuery):
+            await self.handle_active_trades_callback(client, callback_query)
+
+        @self.app.on_callback_query(filters.regex("^nml_"))
+        async def newmemberslist_callback(client, callback_query: CallbackQuery):
+            await self._handle_newmemberslist_callback(client, callback_query)
+
+        @self.app.on_callback_query(filters.regex("^dmm_"))
+        async def dmmessages_callback(client, callback_query: CallbackQuery):
+            await self._handle_dmmessages_callback(client, callback_query)
+
+        @self.app.on_message(filters.group & filters.text & ~filters.command(["entry", "activetrades"]))
+        async def group_message_handler(client, message: Message):
+            await self.handle_group_message(client, message)
+
+        @self.app.on_message(filters.group & filters.service)
+        async def delete_service_messages(client, message: Message):
+            if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
+                try:
+                    await message.delete()
+                except Exception as e:
+                    logger.debug(f"Could not delete service message: {e}")
+
+        @self.app.on_message(filters.group)
+        async def handle_group_reaction_update(client, message: Message):
+            if message.chat.id != FREE_GROUP_ID or not message.reactions:
+                return
+            if not self.db_pool:
+                return
+        # 3. Userbot Login Code Handler (Owner input)
+        @self.app.on_message(filters.user(BOT_OWNER_USER_ID) & filters.private & filters.text)
+        async def handle_owner_input(client, message: Message):
+            # Check for specific command-like inputs first
+            if message.text.startswith("/"):
+                return
+            
+            if message.from_user.id in self.awaiting_login_code:
+                code_hash = self.awaiting_login_code.pop(message.from_user.id)
+                try:
+                    if self.userbot:
+                        await self.userbot.sign_in(USERBOT_PHONE, code_hash, message.text)
+                        
+                        # Save session string to database for persistence
+                        try:
+                            session_string = await self.userbot.export_session_string()
+                            async with self.db_pool.acquire() as conn:
+                                await conn.execute(
+                                    "INSERT INTO bot_settings (key, value) VALUES ('userbot_session_string', $1) "
+                                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                                    session_string
+                                )
+                            print("✅ Userbot session string saved to database")
+                        except Exception as e:
+                            print(f"⚠️ Failed to save session string: {e}")
+
+                        await message.reply("✅ Userbot successfully logged in and ready!")
+                except Exception as e:
+                    await message.reply(f"❌ Login failed: {e}")
+                return
+
+            # Fallback for other text inputs (like price inputs)
+            await self.handle_text_input(client, message)
+
+        # 4. Standard Commands
         @self.app.on_message(filters.command("entry"))
         async def entry_command(client, message: Message):
             await self.handle_entry(client, message)
@@ -709,6 +807,19 @@ class TelegramTradingBot:
                     asyncio.create_task(self._fetch_and_store_reactions(message))
                 except Exception:
                     pass
+
+        # Register auto-reply handler for userbot after successful login
+        if self.userbot:
+            @self.userbot.on_message(filters.private & ~filters.me)
+            async def userbot_support_reply(client: Client, msg: Message):
+                support_text = (
+                    "This is a private trading bot that can only be used by members of the FX Pip Pioneers team.\n\n"
+                    "If you need support or have questions, please contact @fx_pippioneers."
+                )
+                try:
+                    await msg.reply(support_text)
+                except Exception as e:
+                    logger.error(f"Error sending support reply from Userbot: {e}")
 
     async def _fetch_and_store_reactions(self, message: Message):
         """Fetch actual users who reacted and store individually for engagement tracking"""
