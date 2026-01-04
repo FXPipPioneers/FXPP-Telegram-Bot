@@ -545,8 +545,8 @@ class TelegramTradingBot:
             if await self.is_owner(message.from_user.id):
                 keyboard = InlineKeyboardMarkup([
                     [
-                        InlineKeyboardButton("🚀 Setup Userbot", callback_query_data="login_setup"),
-                        InlineKeyboardButton("📊 Check Status", callback_query_data="login_status")
+                        InlineKeyboardButton("🚀 Setup Userbot", callback_data="login_setup"),
+                        InlineKeyboardButton("📊 Check Status", callback_data="login_status")
                     ]
                 ])
                 await message.reply(
@@ -4681,6 +4681,19 @@ class TelegramTradingBot:
                         last_check_at TIMESTAMP WITH TIME ZONE,
                         next_check_at TIMESTAMP WITH TIME ZONE,
                         welcome_dm_sent BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                ''')
+
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS userbot_dm_queue (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        message_type VARCHAR(50) NOT NULL,
+                        message_content TEXT NOT NULL,
+                        status VARCHAR(20) DEFAULT 'pending',
+                        retry_count INTEGER DEFAULT 0,
+                        last_attempt TIMESTAMP WITH TIME ZONE,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
                 ''')
