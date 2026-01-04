@@ -426,7 +426,6 @@ class TelegramTradingBot:
         self.last_warning_send_time = {}  # Track last warning send time per user_id
         self.peer_id_check_state = {}  # Track peer ID checks: user_id -> {joined_at, delay_level, interval, established}
 
-        self._register_handlers()
         self._setup_all_handlers()
 
     async def start(self):
