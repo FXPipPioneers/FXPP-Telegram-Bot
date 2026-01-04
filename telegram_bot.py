@@ -428,6 +428,34 @@ class TelegramTradingBot:
 
         self._register_handlers()
 
+    async def start(self):
+        """Main startup logic"""
+        await self._register_commands()
+        # ... rest of startup logic
+
+    async def _register_commands(self):
+        """Set the bot's command list in Telegram menu"""
+        commands = [
+            BotCommand("entry", "Post a new trade signal"),
+            BotCommand("activetrades", "Show all active trades"),
+            BotCommand("login", "Manage userbot connection"),
+            BotCommand("dbstatus", "Check database connection"),
+            BotCommand("dmstatus", "Check DM delivery status"),
+            BotCommand("freetrialusers", "Manage VIP trials"),
+            BotCommand("peeridstatus", "Check Peer ID verification status"),
+            BotCommand("newmemberslist", "List recently joined members"),
+            BotCommand("dmmessages", "Manage automated DM templates")
+        ]
+        try:
+            # Set commands for the bot owner only
+            await self.app.set_bot_commands(
+                commands,
+                scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID)
+            )
+            print("✅ Bot commands registered in menu for owner")
+        except Exception as e:
+            print(f"⚠️ Failed to register bot commands: {e}")
+
     def _register_handlers(self):
 
         @self.app.on_message(filters.command("login") & filters.user(BOT_OWNER_USER_ID))
@@ -435,13 +463,72 @@ class TelegramTradingBot:
             if not self.userbot:
                 await message.reply("❌ Userbot credentials not configured in environment variables.")
                 return
-            try:
+            
+            args = message.command
+            if len(args) > 1:
+                subcommand = args[1].lower()
+                if subcommand == "status":
+                    await self._handle_userbot_status(message)
+                    return
+                elif subcommand == "setup":
+                    await self._handle_userbot_setup(message)
+                    return
+
+            # Default: Show widget
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📲 Setup Login", callback_data="login_setup"),
+                    InlineKeyboardButton("📊 Check Status", callback_data="login_status")
+                ]
+            ])
+            await message.reply(
+                "🤖 **Userbot Management**\n\n"
+                "Select an option below to manage your userbot connection:",
+                reply_markup=keyboard
+            )
+
+        @self.app.on_callback_query(filters.regex("^login_") & filters.user(BOT_OWNER_USER_ID))
+        async def login_callback(client, callback_query: CallbackQuery):
+            data = callback_query.data
+            if data == "login_setup":
+                await self._handle_userbot_setup(callback_query.message)
+            elif data == "login_status":
+                await self._handle_userbot_status(callback_query.message)
+            await callback_query.answer()
+
+        @self.app.on_message(filters.command("status") & filters.user(BOT_OWNER_USER_ID))
+        async def status_command(client, message: Message):
+            await self._handle_userbot_status(message)
+
+    async def _handle_userbot_status(self, message: Message):
+        if not self.userbot:
+            await message.reply("❌ Userbot not configured.")
+            return
+        
+        is_connected = self.userbot.is_connected
+        status_emoji = "✅" if is_connected else "❌"
+        status_text = "Connected" if is_connected else "Disconnected"
+        
+        try:
+            me = await self.userbot.get_me() if is_connected else None
+            user_info = f"\n👤 **Logged in as**: {me.first_name} (@{me.username})" if me else ""
+            await message.reply(f"{status_emoji} **Userbot Status**: {status_text}{user_info}")
+        except Exception as e:
+            await message.reply(f"{status_emoji} **Userbot Status**: {status_text}\n⚠️ Error: {e}")
+
+    async def _handle_userbot_setup(self, message: Message):
+        if not self.userbot:
+            await message.reply("❌ Userbot credentials not configured.")
+            return
+        try:
+            if not self.userbot.is_connected:
                 await self.userbot.connect()
-                code_hash = await self.userbot.send_code(USERBOT_PHONE)
-                self.awaiting_login_code[message.from_user.id] = code_hash.phone_code_hash
-                await message.reply("📲 Code sent to your 2nd Telegram account. Please reply with the code to verify.")
-            except Exception as e:
-                await message.reply(f"❌ Error starting login: {e}")
+            
+            code_hash = await self.userbot.send_code(USERBOT_PHONE)
+            self.awaiting_login_code[BOT_OWNER_USER_ID] = code_hash.phone_code_hash
+            await message.reply("📲 Code sent to your 2nd Telegram account. Please reply with the code to verify.")
+        except Exception as e:
+            await message.reply(f"❌ Error starting login: {e}")
 
         @self.app.on_message(filters.user(BOT_OWNER_USER_ID) & filters.private & filters.text)
         async def handle_owner_input(client, message: Message):
@@ -6091,6 +6178,8 @@ class TelegramTradingBot:
                     BotCommand("activetrades", "View active trading signals"),
                     BotCommand("tradeoverride", "Override trade status (menu)"),
                     BotCommand("pricetest", "Test live price for a pair"),
+                    BotCommand("login", "Manage userbot (setup/status)"),
+                    BotCommand("status", "Check userbot connection status"),
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
@@ -6276,6 +6365,7 @@ class TelegramTradingBot:
         await self.app.start()
         logger.info("Telegram bot started!")
 
+        # Set up command list in menu
         await self.register_bot_commands()
 
         if DEBUG_GROUP_ID:
