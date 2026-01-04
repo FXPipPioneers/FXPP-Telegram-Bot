@@ -5401,26 +5401,26 @@ class TelegramTradingBot:
                             
                             # Escalate if we've passed current delay threshold
                             if mins_since_join >= delay_mins:
-                                    # Move to next escalation level
-                                    next_delay, next_interval = await self.escalate_peer_id_check(
-                                        [30, 60, 180].index(delay_mins) + 1 if delay_mins in [30, 60, 180] else 3
-                                    )
-                                    next_check = current_time + timedelta(minutes=next_interval)
-                                    
-                                    await conn.execute('''
-                                        UPDATE peer_id_checks 
-                                        SET current_delay_minutes = $1, current_interval_minutes = $2, next_check_at = $3
-                                        WHERE user_id = $4
-                                    ''', next_delay, next_interval, next_check, user_id)
-                                    
-                                    if next_delay == 1440:
-                                        logger.warning(f"Peer ID check for user {user_id} escalated to 24-hour cycle (final attempt)")
-                                else:
-                                    # Same delay level, schedule next interval check
-                                    next_check = current_time + timedelta(minutes=interval_mins)
-                                    await conn.execute('''
-                                        UPDATE peer_id_checks SET next_check_at = $1 WHERE user_id = $2
-                                    ''', next_check, user_id)
+                                # Move to next escalation level
+                                next_delay, next_interval = await self.escalate_peer_id_check(
+                                    [30, 60, 180].index(delay_mins) + 1 if delay_mins in [30, 60, 180] else 3
+                                )
+                                next_check = current_time + timedelta(minutes=next_interval)
+                                
+                                await conn.execute('''
+                                    UPDATE peer_id_checks 
+                                    SET current_delay_minutes = $1, current_interval_minutes = $2, next_check_at = $3
+                                    WHERE user_id = $4
+                                ''', next_delay, next_interval, next_check, user_id)
+                                
+                                if next_delay == 1440:
+                                    logger.warning(f"Peer ID check for user {user_id} escalated to 24-hour cycle (final attempt)")
+                            else:
+                                # Same delay level, schedule next interval check
+                                next_check = current_time + timedelta(minutes=interval_mins)
+                                await conn.execute('''
+                                    UPDATE peer_id_checks SET next_check_at = $1 WHERE user_id = $2
+                                ''', next_check, user_id)
                 
                 await asyncio.sleep(10)  # Check every 10 seconds for due checks
                 
