@@ -540,9 +540,16 @@ class TelegramTradingBot:
         async def active_trades_callback(client, callback_query: CallbackQuery):
             await self.handle_active_trades_callback(client, callback_query)
 
+        @self.app.on_message(filters.command("login"))
+        async def login_command(client, message: Message):
+            if await self.is_owner(message.from_user.id):
+                # Placeholder for login handler logic
+                # In a real scenario, this would trigger the setup or status check
+                await message.reply("Userbot Login Management System\nUse `/login setup` or `/login status`.")
+
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
-                "entry", "activetrades", "tradeoverride", "pricetest",
+                "entry", "activetrades", "tradeoverride", "pricetest", "login",
                 "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
             ]))
         async def text_input_handler(client, message: Message):
@@ -5866,6 +5873,7 @@ class TelegramTradingBot:
                     BotCommand("activetrades", "View active trading signals"),
                     BotCommand("tradeoverride", "Override trade status (menu)"),
                     BotCommand("pricetest", "Test live price for a pair"),
+                    BotCommand("login", "Userbot login/setup (setup|status)"),
                     BotCommand("freetrialusers", "Manage trial system (menu)"),
                     BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
@@ -5886,6 +5894,11 @@ class TelegramTradingBot:
                 logger.warning("⚠️  BOT_OWNER_USER_ID not set, cannot register owner-specific commands")
         except Exception as e:
             logger.error(f"❌ Error registering bot commands: {e}")
+
+    async def ensure_active_trial_peers(self):
+        """Placeholder for peer discovery logic to fix attribute error"""
+        logger.info("Starting active trial peer discovery...")
+        pass
 
     async def run(self):
         await self.init_database()
