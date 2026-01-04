@@ -381,7 +381,43 @@ class TelegramTradingBot:
                           api_hash=TELEGRAM_API_HASH,
                           bot_token=TELEGRAM_BOT_TOKEN,
                           workdir=".") # Fix 2: Session storage enabled by providing workdir
+
+        # Database connection pool
         self.db_pool = None
+        db_url = os.getenv("DATABASE_URL_OVERRIDE") or os.getenv("DATABASE_URL")
+        if db_url:
+            try:
+                # Basic initialization for Render's external Postgres
+                import asyncpg
+                import ssl
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                
+                async def _init_pool():
+                    for attempt in range(5):
+                        try:
+                            self.db_pool = await asyncpg.create_pool(
+                                db_url, 
+                                ssl=ctx
+                            )
+                            print("Database pool successfully initialized")
+                            return
+                        except Exception as e:
+                            wait_time = (attempt + 1) * 5
+                            print(f"Async database initialization attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
+                            if attempt < 4:
+                                await asyncio.sleep(wait_time)
+                            else:
+                                print("All database initialization attempts failed.")
+
+                self.db_pool_future = asyncio.create_task(_init_pool())
+                print("Started database pool initialization task")
+            except Exception as e:
+                print(f"Failed to start DB pool: {e}")
+        else:
+            print("No DATABASE_URL found for main bot")
+        
         self.client_session = None
         self.last_online_time = None
         self.running = True
@@ -393,6 +429,14 @@ class TelegramTradingBot:
         )  # Track user IDs approved for trial
         self.last_warning_send_time = {}  # Track last warning send time per user_id
         self.peer_id_check_state = {}  # Track peer ID checks: user_id -> {joined_at, delay_level, interval, established}
+
+        # Handle BOT_OWNER_USER_ID from environment if 0
+        global BOT_OWNER_USER_ID
+        if BOT_OWNER_USER_ID == 0:
+            env_owner = os.getenv("BOT_OWNER_USER_ID_OVERRIDE") or os.getenv("BOT_OWNER_USER_ID")
+            if env_owner:
+                BOT_OWNER_USER_ID = safe_int(str(env_owner))
+                print(f"Updated BOT_OWNER_USER_ID to {BOT_OWNER_USER_ID} from environment")
 
         self._register_handlers()
 
@@ -551,16 +595,20 @@ class TelegramTradingBot:
                         # Get list of users who reacted with this emoji
                         # Note: In Pyrogram 2.x, we should check if get_reaction_users exists or use get_chat_event_log or similar
                         # However, for now we will fix the common syntax issue with upper() on None
-                        async for reactor in self.app.get_reaction_users(
-                            FREE_GROUP_ID, message.id, emoji_str):
-                            
-                            # Store INDIVIDUAL user reaction
-                            await conn.execute(
-                                '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
-                                   VALUES ($1, $2, $3, $4)
-                                   ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
-                                reactor.id, message.id, emoji_str, current_time
-                            )
+                        # Use a more robust way to get reaction users if available
+                        try:
+                            async for reactor in self.app.get_reaction_users(
+                                FREE_GROUP_ID, message.id, emoji_str):
+                                
+                                # Store INDIVIDUAL user reaction
+                                await conn.execute(
+                                    '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
+                                       VALUES ($1, $2, $3, $4)
+                                       ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
+                                    reactor.id, message.id, emoji_str, current_time
+                                )
+                        except Exception as e:
+                            logger.debug(f"get_reaction_users failed: {e}")
                     except Exception as e:
                         logger.debug(f"Error fetching reactors for emoji {emoji_str}: {e}")
         except Exception as e:
@@ -2666,7 +2714,30 @@ class TelegramTradingBot:
         # Prepare the welcome message
         welcome_msg = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"]
 
-        # Try to send the message
+        # Queue the message for the userbot instead of sending directly
+        if self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO userbot_dm_queue (user_id, message, label, status) VALUES ($1, $2, $3, 'pending')",
+                        user_id, welcome_msg, "Welcome DM (Manual)"
+                    )
+                
+                if callback_query:
+                    await callback_query.message.edit_text(
+                        f"✅ **Queued!**\n\n"
+                        f"Welcome DM queued for user **{user_id}** via Userbot Service."
+                    )
+                else:
+                    await user_message.reply(
+                        f"✅ **Queued!**\n\n"
+                        f"Welcome DM queued for user **{user_id}** via Userbot Service."
+                    )
+                return
+            except Exception as db_err:
+                logger.warning(f"Could not queue welcome DM for user {user_id}: {db_err}")
+
+        # Fallback to direct send if DB fails or not available
         try:
             # Establish peer connection first
             try:
@@ -3482,8 +3553,15 @@ class TelegramTradingBot:
                         VALUES ($1, $2, 30, 3, $3)
                         ON CONFLICT (user_id) DO NOTHING
                     ''', user.id, current_time, next_check)
+                    
+                    # Queue Welcome DM for Userbot
+                    welcome_dm = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"].replace("{user_name}", user.first_name or "Trader")
+                    await conn.execute(
+                        "INSERT INTO userbot_dm_queue (user_id, message, label, status) VALUES ($1, $2, 'Welcome DM', 'pending')",
+                        user.id, welcome_dm
+                    )
                 
-                await self.log_to_debug(f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Peer ID verification scheduled (30m delay)")
+                await self.log_to_debug(f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Peer ID verification and Welcome DM queued")
             except Exception as e:
                 logger.error(f"Error tracking free group join for {user.id}: {e}")
 
@@ -4330,7 +4408,7 @@ class TelegramTradingBot:
 
             self.db_pool = await asyncpg.create_pool(
                 database_url,
-                min_size=1,
+                min_size=1, ssl="require",
                 max_size=5,
                 command_timeout=30,
                 server_settings={'application_name': 'telegram-trading-bot'})
@@ -5619,10 +5697,18 @@ class TelegramTradingBot:
             del AUTO_ROLE_CONFIG['active_members'][member_id]
 
             try:
+                # Queuing the message for userbot instead of sending directly
                 expiry_msg = MESSAGE_TEMPLATES["Trial Status & Expiry"]["Trial Expired"]["message"]
-                await self.app.send_message(int(member_id), expiry_msg)
+                if self.db_pool:
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute(
+                            "INSERT INTO userbot_dm_queue (user_id, message, label) VALUES ($1, $2, $3)",
+                            int(member_id), expiry_msg, "Trial Expired"
+                        )
+                else:
+                    await self.app.send_message(int(member_id), expiry_msg)
             except Exception as e:
-                logger.error(f"Could not send expiry DM to {member_id}: {e}")
+                logger.error(f"Could not queue/send expiry DM to {member_id}: {e}")
 
             await self.save_auto_role_config()
             logger.info(f"Trial expired for user {member_id}")
@@ -5726,154 +5812,18 @@ class TelegramTradingBot:
         except Exception:
             return False
 
-    async def send_24hr_warning(self, member_id: str):
-        try:
-            message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["24-Hour Warning"]["message"]
-            await self.app.send_message(int(member_id), message)
-            logger.info(f"✅ Sent 24-hour trial warning DM to user {member_id}")
-            await self.log_to_debug(f"✅ Sent 24-hour trial warning DM to user {member_id}", user_id=int(member_id))
-        except Exception as e:
-            error_msg = f"❌ Could not send 24-hour warning DM to {member_id}: {e}"
-            logger.error(error_msg)
-            message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["24-Hour Warning"]["message"]
-            await self.log_to_debug(error_msg, is_error=True, user_id=int(member_id), failed_message=message)
-            if str(member_id) in AUTO_ROLE_CONFIG['active_members']:
-                AUTO_ROLE_CONFIG['active_members'][str(member_id)]['warning_24h_sent'] = True
-                await self.save_auto_role_config()
-
-    async def send_3hr_warning(self, member_id: str):
-        try:
-            message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["3-Hour Warning"]["message"]
-            await self.app.send_message(int(member_id), message)
-            logger.info(f"✅ Sent 3-hour trial warning DM to user {member_id}")
-            await self.log_to_debug(f"✅ Sent 3-hour trial warning DM to user {member_id}", user_id=int(member_id))
-        except Exception as e:
-            error_msg = f"❌ Could not send 3-hour warning DM to {member_id}: {e}"
-            logger.error(error_msg)
-            message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["3-Hour Warning"]["message"]
-            await self.log_to_debug(error_msg, is_error=True, user_id=int(member_id), failed_message=message)
-            if str(member_id) in AUTO_ROLE_CONFIG['active_members']:
-                AUTO_ROLE_CONFIG['active_members'][str(member_id)]['warning_3h_sent'] = True
-                await self.save_auto_role_config()
-
-    async def track_failed_welcome_dm(self, user_id: int, first_name: str, msg_type: str, message_content: str):
-        """Track a failed welcome DM for retry"""
-        if not self.db_pool:
-            return
-        try:
+    async def handle_welcome_dm_fallback(self, user_id: int, first_name: str, msg_type: str, message_content: str):
+        """Final safety: All DMs MUST go to queue, never sent from here"""
+        if self.db_pool:
             async with self.db_pool.acquire() as conn:
                 await conn.execute('''
-                    INSERT INTO pending_welcome_dms (user_id, first_name, message_type, message_content, failed_attempts, last_attempt)
-                    VALUES ($1, $2, $3, $4, 1, NOW())
-                    ON CONFLICT (user_id) DO UPDATE SET
-                    failed_attempts = failed_attempts + 1,
-                    last_attempt = NOW()
-                ''', user_id, first_name, msg_type, message_content)
-        except Exception as e:
-            logger.error(f"Error tracking failed welcome DM for {user_id}: {e}")
+                    INSERT INTO userbot_dm_queue (user_id, message, label)
+                    VALUES ($1, $2, $3)
+                ''', user_id, message_content, msg_type)
+            logger.info(f"✅ Safe-routed DM for {user_id} to Userbot queue")
+        else:
+            logger.error(f"❌ Cannot send DM to {user_id}: No DB pool and DMs disabled in main bot")
 
-    async def retry_failed_welcome_dms_loop(self):
-        """Retry failed welcome DMs every 2 minutes with dynamic recalculation for warnings"""
-        await asyncio.sleep(60)
-        
-        while self.running:
-            try:
-                if not self.db_pool:
-                    await asyncio.sleep(120)
-                    continue
-                
-                async with self.db_pool.acquire() as conn:
-                    pending = await conn.fetch('SELECT * FROM pending_welcome_dms ORDER BY created_at ASC LIMIT 10')
-                    
-                    if pending:
-                        await self.log_to_debug(f"🔄 Welcome DM retry cycle: Checking {len(pending)} pending DM(s)...")
-                    
-                    for row in pending:
-                        user_id = row['user_id']
-                        first_name = row['first_name']
-                        message_content = row['message_content']
-                        failed_attempts = row['failed_attempts']
-                        
-                        # Skip if too many attempts (> 5)
-                        if failed_attempts > 5:
-                            await conn.execute('DELETE FROM pending_welcome_dms WHERE user_id = $1', user_id)
-                            await self.log_to_debug(f"Gave up retrying welcome DM to {first_name} (ID: {user_id}) after {failed_attempts} attempts", is_error=True, user_id=user_id)
-                            continue
-                        
-                        # For warning messages, recalculate based on actual trial time remaining
-                        final_message = message_content
-                        
-                        # Check if this is a 24-hour or 3-hour warning by checking message content
-                        if "24 hours" in message_content or "expire in 24" in message_content:
-                            hours_remaining = await self._get_trial_hours_remaining(user_id, conn)
-                            
-                            if hours_remaining is not None and hours_remaining > 0:
-                                # Dynamically update the message with actual time remaining
-                                hours_int = int(hours_remaining)
-                                final_message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["24-Hour Warning"]["message"]
-                                # Replace "24 hours" with actual hours remaining
-                                final_message = final_message.replace("24 hours", f"{hours_int} hours")
-                                final_message = final_message.replace("in 24", f"in {hours_int}")
-                            elif hours_remaining is not None and hours_remaining <= 0:
-                                # Trial already expired - remove from queue
-                                await conn.execute('DELETE FROM pending_welcome_dms WHERE user_id = $1', user_id)
-                                logger.info(f"Removed expired 24-hour warning for {user_id}")
-                                continue
-                        
-                        elif "3 hours" in message_content or "expire in just 3" in message_content:
-                            hours_remaining = await self._get_trial_hours_remaining(user_id, conn)
-                            
-                            if hours_remaining is not None and hours_remaining > 0:
-                                # Dynamically update the message with actual time remaining
-                                hours_int = int(hours_remaining)
-                                final_message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["3-Hour Warning"]["message"]
-                                # Replace "3 hours" with actual hours remaining
-                                final_message = final_message.replace("3 hours", f"{hours_int} hours")
-                                final_message = final_message.replace("in just 3", f"in just {hours_int}")
-                            elif hours_remaining is not None and hours_remaining <= 0:
-                                # Trial already expired - remove from queue
-                                await conn.execute('DELETE FROM pending_welcome_dms WHERE user_id = $1', user_id)
-                                logger.info(f"Removed expired 3-hour warning for {user_id}")
-                                continue
-                        
-                        # Rate limit: don't send warning to same user more than once per 5 minutes
-                        current_time = datetime.now(pytz.UTC)
-                        last_send = self.last_warning_send_time.get(user_id)
-                        
-                        if last_send and (current_time - last_send).total_seconds() < 300:  # 5 minute cooldown
-                            logger.debug(f"Skipping retry for {user_id} - sent too recently")
-                            continue
-                        
-                        try:
-                            # Resolve peer and send
-                            await self.app.get_users([user_id])
-                            await asyncio.sleep(1)
-                            await self.app.send_message(user_id, final_message)
-                            
-                            # Track when we sent this warning
-                            self.last_warning_send_time[user_id] = current_time
-                            
-                            # Success - remove from pending
-                            await conn.execute('DELETE FROM pending_welcome_dms WHERE user_id = $1', user_id)
-                            success_msg = f"✅ Successfully sent welcome DM to {first_name} (ID: {user_id}) on retry attempt {failed_attempts}"
-                            logger.info(success_msg)
-                            await self.log_to_debug(success_msg, user_id=user_id)
-                            
-                        except Exception as e:
-                            error_msg = f"⚠️ Retry attempt {failed_attempts} failed for {first_name} (ID: {user_id}): {e}"
-                            logger.warning(error_msg)
-                            await self.log_to_debug(error_msg, is_error=True, user_id=user_id, failed_message=final_message)
-                            # Update attempt counter
-                            await conn.execute(
-                                'UPDATE pending_welcome_dms SET failed_attempts = $1, last_attempt = NOW() WHERE user_id = $2',
-                                failed_attempts + 1, user_id)
-                
-                await asyncio.sleep(120)  # Retry every 2 minutes
-                
-            except Exception as e:
-                logger.error(f"Error in retry welcome DMs loop: {e}")
-                await asyncio.sleep(120)
-    
     async def _get_trial_hours_remaining(self, user_id: int, conn) -> Optional[float]:
         """Get the number of hours remaining in a user's trial"""
         try:
@@ -5907,75 +5857,6 @@ class TelegramTradingBot:
             logger.debug(f"Error getting trial hours remaining for {user_id}: {e}")
             return None
 
-    async def send_followup_dm(self, member_id: str, days: int):
-        try:
-            if days == 3:
-                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["3 Days After Trial Ends"]["message"]
-            elif days == 7:
-                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["7 Days After Trial Ends"]["message"]
-            elif days == 14:
-                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["14 Days After Trial Ends"]["message"]
-            else:
-                return
-
-            await self.app.send_message(int(member_id), message)
-            logger.info(f"✅ Sent {days}-day follow-up DM to user {member_id}")
-            await self.log_to_debug(f"✅ Sent {days}-day follow-up DM to user {member_id}", user_id=int(member_id))
-        except Exception as e:
-            error_msg = f"❌ Could not send {days}-day follow-up DM to {member_id}: {e}"
-            logger.error(error_msg)
-            if days == 3:
-                msg = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["3 Days After Trial Ends"]["message"]
-            elif days == 7:
-                msg = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["7 Days After Trial Ends"]["message"]
-            elif days == 14:
-                msg = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["14 Days After Trial Ends"]["message"]
-            else:
-                msg = ""
-            await self.log_to_debug(error_msg, is_error=True, user_id=int(member_id), failed_message=msg)
-
-    async def monday_activation_loop(self):
-        await asyncio.sleep(60)
-
-        while self.running:
-            try:
-                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-                weekday = current_time.weekday()
-                hour = current_time.hour
-
-                if weekday == 0 and hour <= 1:
-                    for member_id, data in list(
-                            AUTO_ROLE_CONFIG['active_members'].items()):
-                        try:
-                            if data.get('weekend_delayed',
-                                        False) and not data.get(
-                                            'monday_notification_sent', False):
-                                try:
-                                    activation_message = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Monday Activation (Weekend Delay)"]["message"]
-                                    await self.app.send_message(
-                                        int(member_id), activation_message)
-                                    logger.info(
-                                        f"✅ Sent Monday activation DM to {member_id}"
-                                    )
-                                    await self.log_to_debug(f"✅ Sent Monday activation DM to {member_id}")
-
-                                    AUTO_ROLE_CONFIG['active_members'][
-                                        member_id][
-                                            'monday_notification_sent'] = True
-                                    await self.save_auto_role_config()
-                                except Exception as e:
-                                    error_msg = f"❌ Could not send Monday activation DM to {member_id}: {e}"
-                                    logger.error(error_msg)
-                                    await self.log_to_debug(error_msg, is_error=True)
-                        except Exception as e:
-                            logger.error(
-                                f"Error processing Monday activation for {member_id}: {e}"
-                            )
-            except Exception as e:
-                logger.error(f"Error in monday activation loop: {e}")
-
-            await asyncio.sleep(3600)
-
     async def register_bot_commands(self):
         try:
             # All commands are owner-only
@@ -6006,166 +5887,8 @@ class TelegramTradingBot:
         except Exception as e:
             logger.error(f"❌ Error registering bot commands: {e}")
 
-    async def engagement_tracking_loop(self):
-        """Track emoji reactions in free group and send discount DM to engaged users."""
-        await asyncio.sleep(120)  # Wait 2 mins before starting
-        
-        while self.running:
-            try:
-                if not self.db_pool or not FREE_GROUP_ID:
-                    await asyncio.sleep(7200)  # Check every 2 hours
-                    continue
-
-                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-                
-                # Get all free group joins
-                async with self.db_pool.acquire() as conn:
-                    joins = await conn.fetch(
-                        'SELECT user_id, joined_at, discount_sent FROM free_group_joins WHERE discount_sent = FALSE'
-                    )
-                
-                for join_row in joins:
-                    user_id = join_row['user_id']
-                    joined_at = join_row['joined_at']
-                    
-                    # Check if user has been in group for more than 2 weeks
-                    two_weeks_ago = joined_at + timedelta(days=14)
-                    if current_time < two_weeks_ago:
-                        continue
-                    
-                    # Count reactions AFTER 2-week mark
-                    async with self.db_pool.acquire() as conn:
-                        reaction_count = await conn.fetchval(
-                            '''SELECT COUNT(DISTINCT message_id) FROM emoji_reactions
-                               WHERE user_id = $1 AND reaction_time > $2''',
-                            user_id, two_weeks_ago
-                        )
-                    
-                    # If user has 5+ reactions after 2 weeks, send discount DM
-                    if reaction_count >= 5:
-                        await self.send_engagement_discount_dm(user_id)
-                        
-                        # Mark as sent
-                        async with self.db_pool.acquire() as conn:
-                            await conn.execute(
-                                'UPDATE free_group_joins SET discount_sent = TRUE WHERE user_id = $1',
-                                user_id
-                            )
-                        
-                        logger.info(f"Sent engagement discount DM to user {user_id} (5+ reactions after 2 weeks)")
-                
-                await asyncio.sleep(7200)  # Check every 2 hours
-            except Exception as e:
-                await self.log_to_debug(f"Error in engagement tracking loop: {e}", is_error=True)
-                await asyncio.sleep(7200)
-
-    async def send_engagement_discount_dm(self, user_id: int):
-        """Send 50% discount DM to engaged free group members."""
-        try:
-            message = MESSAGE_TEMPLATES["Engagement & Offers"]["Engagement Discount (50% Off)"]["message"]
-            await self.app.send_message(user_id, message)
-            logger.info(f"✅ Sent engagement discount DM to user {user_id}")
-            await self.log_to_debug(f"✅ Sent engagement discount DM to user {user_id}", user_id=user_id)
-        except Exception as e:
-            error_msg = f"❌ Could not send engagement discount DM to {user_id}: {e}"
-            logger.error(error_msg)
-            message = MESSAGE_TEMPLATES["Engagement & Offers"]["Engagement Discount (50% Off)"]["message"]
-            await self.log_to_debug(error_msg, is_error=True, user_id=user_id, failed_message=message)
-
-    async def daily_vip_trial_offer_loop(self):
-        """Daily check at 09:00 Amsterdam time to offer VIP trial to free-only members.
-        
-        Logic:
-        - Excludes ALL users who ever activated a trial (even if expired 3 weeks ago)
-        - Alternating pattern: Send offer → Skip 1 day → Send offer → Skip 1 day... (24hr cooldown)
-        - Continues looping until user joins VIP trial
-        """
-        await asyncio.sleep(60)
-        
-        while self.running:
-            try:
-                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-                
-                if current_time.hour == 9 and current_time.minute < 2:
-                    if not self.db_pool:
-                        await asyncio.sleep(60)
-                        continue
-
-                    try:
-                        async with self.db_pool.acquire() as conn:
-                            free_members = await conn.fetch(
-                                '''SELECT DISTINCT fgj.user_id FROM free_group_joins fgj
-                                   LEFT JOIN trial_offer_history toh ON fgj.user_id = toh.user_id
-                                   LEFT JOIN vip_trial_activations vta ON fgj.user_id = vta.user_id
-                                   WHERE vta.user_id IS NULL AND 
-                                   (toh.user_id IS NULL OR toh.offer_sent_date < NOW() - INTERVAL '24 hours')
-                                   -- vta.user_id IS NULL: Excludes anyone with trial record (active or expired)
-                                   -- toh.user_id IS NULL: Never offered before (send on day 1)
-                                   -- offer_sent_date < 24 hours ago: Send again on day 3, 5, 7... (skip odd days)
-                                '''
-                            )
-
-                        for member_row in free_members:
-                            user_id = member_row['user_id']
-                            
-                            try:
-                                chat_member = await self.app.get_chat_member(VIP_GROUP_ID, user_id)
-                                is_in_vip = chat_member.status in [
-                                    ChatMemberStatus.MEMBER,
-                                    ChatMemberStatus.ADMINISTRATOR,
-                                    ChatMemberStatus.OWNER
-                                ]
-                            except Exception:
-                                is_in_vip = False
-
-                            if not is_in_vip:
-                                offer_message = MESSAGE_TEMPLATES["Engagement & Offers"]["Daily VIP Trial Offer"]["message"]
-                                
-                                try:
-                                    await self.app.send_message(user_id, offer_message)
-                                    
-                                    async with self.db_pool.acquire() as conn:
-                                        await conn.execute(
-                                            '''INSERT INTO trial_offer_history (user_id, offer_sent_date)
-                                               VALUES ($1, $2)
-                                               ON CONFLICT (user_id) DO UPDATE SET offer_sent_date = $2''',
-                                            user_id, current_time
-                                        )
-                                    
-                                    logger.info(f"✅ Sent daily VIP trial offer DM to user {user_id}")
-                                    await self.log_to_debug(f"✅ Sent daily VIP trial offer DM to user {user_id}", user_id=user_id)
-                                except Exception as e:
-                                    error_msg = f"❌ Could not send daily trial offer DM to {user_id}: {e}"
-                                    logger.error(error_msg)
-                                    offer_message = MESSAGE_TEMPLATES["Engagement & Offers"]["Daily VIP Trial Offer"]["message"]
-                                    await self.log_to_debug(error_msg, is_error=True, user_id=user_id, failed_message=offer_message)
-
-                    except Exception as e:
-                        logger.error(f"Error in daily VIP trial offer check: {e}")
-                    
-                    await asyncio.sleep(120)
-                else:
-                    await asyncio.sleep(60)
-                    
-            except Exception as e:
-                logger.error(f"Error in daily_vip_trial_offer_loop: {e}")
-                await asyncio.sleep(60)
-
-    async def ensure_active_trial_peers(self):
-        """No-op: Cleared by user request to start fresh"""
-        return
-
     async def run(self):
         await self.init_database()
-
-        # One-time cleanup of old data on next startup on Render
-        if self.db_pool:
-            try:
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute("TRUNCATE TABLE peer_id_checks, active_members, dm_schedule RESTART IDENTITY CASCADE;")
-                    logger.info("📊 DATABASE: Old user records cleared on startup.")
-            except Exception as e:
-                logger.error(f"Failed to clear database on startup: {e}")
 
         await self.app.start()
         logger.info("Telegram bot started!")
@@ -6177,7 +5900,7 @@ class TelegramTradingBot:
                 await self.app.get_chat(DEBUG_GROUP_ID)
                 await self.app.send_message(
                     DEBUG_GROUP_ID,
-                    "**Bot Started!** Trading bot is now online and ready.")
+                    "**Bot Started!** Signal engine is online. DMs delegated to Userbot.")
             except Exception as e:
                 logger.error(f"Could not send startup message: {e}")
 
@@ -6195,35 +5918,18 @@ class TelegramTradingBot:
             except Exception as e:
                 logger.error(f"Could not send recovery message: {e}")
 
-        # Removed: check_offline_tp_sl_hits()
-        # Note: recover_missed_signals() uses get_chat_history() which is not available to bots in Telegram API
-        # Bots cannot retrieve message history from groups/channels - this is a fundamental API limitation
-        # Removed: check_offline_joiners() - handle_free_group_join() already registers users
-        # Fixed: ensure_active_trial_peers() now marks welcome_dm_sent=FALSE so escalation loop will send them
-        # NOTE: Preexpiration warnings are handled by preexpiration_warning_loop() - removed duplicate startup call to prevent spamming
-        # Removed: check_offline_followup_dms()
-        # Removed: check_offline_engagement_discounts()
-        # Removed: validate_and_fix_trial_expiry_times()
-
-        # Initialize active trial users for peer ID verification
+        # Peer escalation for discovery ONLY (helps userbot find users)
         try:
             await self.ensure_active_trial_peers()
         except Exception as e:
-            logger.error(f"Error in startup: {e}")
+            logger.error(f"Error in startup discovery: {e}")
 
         self.startup_complete = True
-        self.peer_id_check_state = {}
 
+        # ONLY Signal Engine loops remain
         asyncio.create_task(self.price_tracking_loop())
-        asyncio.create_task(self.peer_id_escalation_loop())
-        asyncio.create_task(self.trial_expiry_loop())
-        asyncio.create_task(self.preexpiration_warning_loop())
-        asyncio.create_task(self.followup_dm_loop())
-        asyncio.create_task(self.monday_activation_loop())
-        asyncio.create_task(self.engagement_tracking_loop())
-        asyncio.create_task(self.retry_failed_welcome_dms_loop())
-        asyncio.create_task(self.daily_vip_trial_offer_loop())
-
+        asyncio.create_task(self.peer_id_escalation_loop()) 
+        
         try:
             while self.running:
                 await asyncio.sleep(1)
@@ -6235,29 +5941,22 @@ class TelegramTradingBot:
                 await self.db_pool.close()
             await self.app.stop()
 
-
 async def run_web_server():
-
     async def health_check(request):
         return web.Response(text="OK", status=200)
-
     app = web.Application()
     app.router.add_get('/health', health_check)
     app.router.add_get('/', health_check)
-
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
     logger.info("Health check server running on port 8080")
 
-
 async def main():
     await run_web_server()
-
     bot = TelegramTradingBot()
     await bot.run()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
