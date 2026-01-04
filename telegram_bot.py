@@ -543,9 +543,36 @@ class TelegramTradingBot:
         @self.app.on_message(filters.command("login"))
         async def login_command(client, message: Message):
             if await self.is_owner(message.from_user.id):
-                # Placeholder for login handler logic
-                # In a real scenario, this would trigger the setup or status check
-                await message.reply("Userbot Login Management System\nUse `/login setup` or `/login status`.")
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🚀 Setup Userbot", callback_query_data="login_setup"),
+                        InlineKeyboardButton("📊 Check Status", callback_query_data="login_status")
+                    ]
+                ])
+                await message.reply(
+                    "**Userbot Login Management System**\n\n"
+                    "Use the buttons below to manage your Userbot session.",
+                    reply_markup=keyboard
+                )
+
+        @self.app.on_callback_query(filters.regex("^login_"))
+        async def login_callback(client, callback_query: CallbackQuery):
+            if not await self.is_owner(callback_query.from_user.id):
+                await callback_query.answer("Unauthorized.", show_alert=True)
+                return
+
+            action = callback_query.data.split("_")[1]
+            if action == "setup":
+                await callback_query.message.edit_text(
+                    "**Userbot Setup Started**\n\n"
+                    "Please use `/login setup` to begin the interactive login process."
+                )
+            elif action == "status":
+                await callback_query.message.edit_text(
+                    "**Userbot Status Check**\n\n"
+                    "Please use `/login status` to check the current connection health."
+                )
+            await callback_query.answer()
 
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([

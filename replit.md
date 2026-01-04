@@ -42,6 +42,7 @@ The bot is implemented as a high-performance, single-file asynchronous Python ap
 **CRITICAL**: Every time a code change is made in Replit, the deployment package must be updated.
 1. Make code edits in `telegram_bot.py`.
 2. **Update the Zip**: Run the command to recreate `telegram_bot_github.zip`.
+   - **IMPORTANT**: Ensure only necessary files (`telegram_bot.py`, `requirements.txt`, `render.yaml`, `replit.md`, and `userbot_service.py`) are included in the zip. Do not include documentation or asset folders.
 3. Download the zip, extract, and push the updated files to your GitHub repository.
 4. Render will automatically detect the GitHub push and redeploy the bot.
 
