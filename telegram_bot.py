@@ -5397,10 +5397,10 @@ class TelegramTradingBot:
                                     current_interval_minutes = $3
                                 WHERE user_id = $4
                             ''', next_check, delay_mins, interval_mins, user_id)
-                                mins_since_join = (current_time - joined_at).total_seconds() / 60
-                                
-                                # Escalate if we've passed current delay threshold
-                                if mins_since_join >= delay_mins:
+                            mins_since_join = (current_time - joined_at).total_seconds() / 60
+                            
+                            # Escalate if we've passed current delay threshold
+                            if mins_since_join >= delay_mins:
                                     # Move to next escalation level
                                     next_delay, next_interval = await self.escalate_peer_id_check(
                                         [30, 60, 180].index(delay_mins) + 1 if delay_mins in [30, 60, 180] else 3
