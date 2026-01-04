@@ -381,6 +381,13 @@ class TelegramTradingBot:
                           api_hash=TELEGRAM_API_HASH,
                           bot_token=TELEGRAM_BOT_TOKEN,
                           workdir=".")
+        
+        # Override with environment variables if provided
+        db_url = os.getenv("DATABASE_URL_OVERRIDE") or os.getenv("DATABASE_URL")
+        self.db_url = db_url
+        
+        self.owner_id = safe_int(os.getenv("BOT_OWNER_USER_ID_OVERRIDE") or os.getenv("BOT_OWNER_USER_ID", "6664440870"))
+
         self.userbot = None
         self.userbot_phone = os.getenv("USERBOT_PHONE", "")
         self.awaiting_login_code = {}  # user_id -> phone_code_hash
@@ -647,18 +654,7 @@ class TelegramTradingBot:
 
     async def is_owner(self, user_id: int) -> bool:
         """Check if user is the bot owner"""
-        # Ensure we're comparing with the correct ID from env
-        owner_id = int(os.getenv("BOT_OWNER_USER_ID", "0"))
-        if owner_id == 0:
-            return False
-            
-        is_owner = user_id == owner_id
-        if not is_owner:
-            # Log failed owner checks for debugging
-            logger.debug(
-                f"Owner check failed: user {user_id} != owner {owner_id}"
-            )
-        return is_owner
+        return user_id == self.owner_id
 
     async def handle_group_message(self, client: Client, message: Message):
         """Handle messages in groups"""
@@ -5885,11 +5881,12 @@ class TelegramTradingBot:
                     session_string=session_string,
                     api_id=TELEGRAM_API_ID,
                     api_hash=TELEGRAM_API_HASH,
-                    workdir="."
+                    workdir=".",
+                    no_updates=True
                 )
                 await self.userbot.start()
-                logger.info("✅ Userbot started successfully from database session")
-                await self.log_to_debug("✅ Userbot started successfully")
+                logger.info("✅ Userbot started successfully from database session (Updates Disabled)")
+                await self.log_to_debug("✅ Userbot started successfully (Updates Disabled)")
         except Exception as e:
             logger.error(f"Failed to start userbot: {e}")
             await self.log_to_debug(f"❌ Userbot startup failed: {e}", is_error=True)
@@ -6251,7 +6248,7 @@ class TelegramTradingBot:
 
     async def init_db_pool(self):
         """Initialize the database connection pool"""
-        database_url = os.getenv("DATABASE_URL")
+        database_url = self.db_url
         if not database_url:
             logger.error("DATABASE_URL environment variable is not set")
             raise ValueError("DATABASE_URL environment variable is required")
@@ -6264,14 +6261,75 @@ class TelegramTradingBot:
                 database_url += "?sslmode=require"
         
         try:
-            self.db_pool = await asyncpg.create_pool(database_url)
+            # Simplified for production stability
+            self.db_pool = await asyncpg.create_pool(
+                database_url,
+                min_size=1,
+                max_size=10
+            )
             logger.info("Database connection pool initialized")
         except Exception as e:
             logger.error(f"Failed to initialize database pool: {e}")
             raise
 
+    async def init_db_schema(self):
+        """Initialize database schema if tables don't exist"""
+        if not self.db_pool:
+            return
+            
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Create bot_settings table
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS bot_settings (
+                        setting_key TEXT PRIMARY KEY,
+                        setting_value TEXT
+                    )
+                ''')
+                
+                # Create peer_id_checks table
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS peer_id_checks (
+                        user_id BIGINT PRIMARY KEY,
+                        joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        peer_id_established BOOLEAN DEFAULT FALSE,
+                        welcome_dm_sent BOOLEAN DEFAULT FALSE,
+                        current_delay_minutes INTEGER DEFAULT 0,
+                        current_interval_minutes INTEGER DEFAULT 1,
+                        next_check_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        last_check TIMESTAMP WITH TIME ZONE
+                    )
+                ''')
+                
+                # Create other necessary tables (simplified for startup)
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS free_group_joins (
+                        user_id BIGINT PRIMARY KEY,
+                        joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        discount_sent BOOLEAN DEFAULT FALSE
+                    )
+                ''')
+                
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS pending_welcome_dms (
+                        user_id BIGINT PRIMARY KEY,
+                        first_name TEXT,
+                        message_type TEXT,
+                        message_content TEXT,
+                        failed_attempts INTEGER DEFAULT 0,
+                        last_attempt TIMESTAMP WITH TIME ZONE,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                
+                logger.info("Database schema verified/initialized")
+        except Exception as e:
+            logger.error(f"Error initializing database schema: {e}")
+            raise
+
     async def run(self):
         await self.init_db_pool()
+        await self.init_db_schema()
         
         # New startup logic with userbot
         await self.app.start()
