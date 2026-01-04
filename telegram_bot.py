@@ -478,6 +478,9 @@ class TelegramTradingBot:
             BotCommand("dmmessages", "Manage automated DM templates")
         ]
         try:
+            # Clear old commands first
+            await self.app.delete_bot_commands(scope=BotCommandScopeChat(chat_id=BOT_OWNER_USER_ID))
+            
             # Set commands for the bot owner only
             await self.app.set_bot_commands(
                 commands,
@@ -488,7 +491,11 @@ class TelegramTradingBot:
             print(f"⚠️ Failed to register bot commands: {e}")
 
     def _register_handlers(self):
+        # Empty this out entirely as we're moving everything to _setup_all_handlers
+        pass
 
+    def _setup_all_handlers(self):
+        # 1. Login Command (with subcommands)
         @self.app.on_message(filters.command("login") & filters.user(BOT_OWNER_USER_ID))
         async def login_command(client, message: Message):
             if not self.userbot:
@@ -518,6 +525,7 @@ class TelegramTradingBot:
                 reply_markup=keyboard
             )
 
+        # 2. Login Callbacks
         @self.app.on_callback_query(filters.regex("^login_") & filters.user(BOT_OWNER_USER_ID))
         async def login_callback(client, callback_query: CallbackQuery):
             data = callback_query.data
@@ -527,41 +535,12 @@ class TelegramTradingBot:
                 await self._handle_userbot_status(callback_query.message)
             await callback_query.answer()
 
+        # 3. Status Command (Redirect to login status logic)
         @self.app.on_message(filters.command("status") & filters.user(BOT_OWNER_USER_ID))
         async def status_command(client, message: Message):
             await self._handle_userbot_status(message)
 
-    async def _handle_userbot_status(self, message: Message):
-        if not self.userbot:
-            await message.reply("❌ Userbot not configured.")
-            return
-        
-        is_connected = self.userbot.is_connected
-        status_emoji = "✅" if is_connected else "❌"
-        status_text = "Connected" if is_connected else "Disconnected"
-        
-        try:
-            me = await self.userbot.get_me() if is_connected else None
-            user_info = f"\n👤 **Logged in as**: {me.first_name} (@{me.username})" if me else ""
-            await message.reply(f"{status_emoji} **Userbot Status**: {status_text}{user_info}")
-        except Exception as e:
-            await message.reply(f"{status_emoji} **Userbot Status**: {status_text}\n⚠️ Error: {e}")
-
-    async def _handle_userbot_setup(self, message: Message):
-        if not self.userbot:
-            await message.reply("❌ Userbot credentials not configured.")
-            return
-        try:
-            if not self.userbot.is_connected:
-                await self.userbot.connect()
-            
-            code_hash = await self.userbot.send_code(USERBOT_PHONE)
-            self.awaiting_login_code[BOT_OWNER_USER_ID] = code_hash.phone_code_hash
-            await message.reply("📲 Code sent to your 2nd Telegram account. Please reply with the code to verify.")
-        except Exception as e:
-            await message.reply(f"❌ Error starting login: {e}")
-
-    def _setup_all_handlers(self):
+        # 4. Userbot Login Code Handler (Owner input)
         @self.app.on_message(filters.user(BOT_OWNER_USER_ID) & filters.private & filters.text)
         async def handle_owner_input(client, message: Message):
             if message.from_user.id in self.awaiting_login_code:
@@ -602,9 +581,11 @@ class TelegramTradingBot:
                 except Exception as e:
                     await message.reply(f"❌ Login failed: {e}")
                 return
-            # ... continue to existing text_input_handler logic or call it
+            
+            # If not a login code, pass to general text input handler
             await self.handle_text_input(client, message)
 
+        # 5. Core Trading Commands
         @self.app.on_message(filters.command("entry"))
         async def entry_command(client, message: Message):
             await self.handle_entry(client, message)
@@ -621,6 +602,7 @@ class TelegramTradingBot:
         async def price_test_command(client, message: Message):
             await self.handle_price_test(client, message)
 
+        # 6. Database & Status Commands
         @self.app.on_message(filters.command("dbstatus"))
         async def db_status_command(client, message: Message):
             await self.handle_db_status(client, message)
@@ -629,6 +611,7 @@ class TelegramTradingBot:
         async def dm_status_command(client, message: Message):
             await self.handle_dm_status(client, message)
 
+        # 7. Management Commands
         @self.app.on_message(filters.command("freetrialusers"))
         async def timed_auto_role_command(client, message: Message):
             await self.handle_timed_auto_role(client, message)
@@ -649,15 +632,16 @@ class TelegramTradingBot:
         async def peeridstatus_command(client, message: Message):
             await self.handle_peer_id_status(client, message)
 
+        # 8. Event Handlers
         @self.app.on_chat_join_request()
         async def handle_join_request(client, join_request: ChatJoinRequest):
             await self.process_join_request(client, join_request)
 
         @self.app.on_chat_member_updated()
-        async def handle_member_update(client,
-                                       member_update: ChatMemberUpdated):
+        async def handle_member_update(client, member_update: ChatMemberUpdated):
             await self.process_member_update(client, member_update)
 
+        # 9. Callback Logic (Remaining)
         @self.app.on_callback_query(filters.regex("^entry_"))
         async def entry_callback(client, callback_query: CallbackQuery):
             await self.handle_entry_callback(client, callback_query)
@@ -667,8 +651,7 @@ class TelegramTradingBot:
             await self.handle_override_callback(client, callback_query)
 
         @self.app.on_callback_query(filters.regex("^tar_"))
-        async def timedautorole_callback(client,
-                                         callback_query: CallbackQuery):
+        async def timedautorole_callback(client, callback_query: CallbackQuery):
             await self.handle_timedautorole_callback(client, callback_query)
 
         @self.app.on_callback_query(filters.regex("^pricetest_"))
@@ -703,14 +686,7 @@ class TelegramTradingBot:
         async def active_trades_callback(client, callback_query: CallbackQuery):
             await self.handle_active_trades_callback(client, callback_query)
 
-        @self.app.on_message(
-            filters.private & filters.text & ~filters.command([
-                "entry", "activetrades", "tradeoverride", "pricetest",
-                "dbstatus", "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
-            ]))
-        async def text_input_handler(client, message: Message):
-            await self.handle_text_input(client, message)
-
+        # 10. General Group Handlers
         @self.app.on_message(filters.group & filters.text & ~filters.command([
             "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
             "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
@@ -720,26 +696,19 @@ class TelegramTradingBot:
 
         @self.app.on_message(filters.group & filters.service)
         async def delete_service_messages(client, message: Message):
-            """Auto-delete all service messages from VIP and FREE groups"""
             if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
                 try:
                     await message.delete()
-                except Exception as e:
-                    logger.debug(f"Could not delete service message: {e}")
+                except Exception:
+                    pass
 
-        @self.app.on_message(filters=filters.group)
+        @self.app.on_message(filters.group)
         async def handle_group_reaction_update(client, message: Message):
-            """Track emoji reactions in free group for engagement scoring"""
-            if message.chat.id != FREE_GROUP_ID or not message.reactions:
-                return
-            
-            if not self.db_pool:
-                return
-            
-            try:
-                asyncio.create_task(self._fetch_and_store_reactions(message))
-            except Exception as e:
-                logger.debug(f"Error scheduling reaction fetch: {e}")
+            if message.chat.id == FREE_GROUP_ID and message.reactions:
+                try:
+                    asyncio.create_task(self._fetch_and_store_reactions(message))
+                except Exception:
+                    pass
 
     async def _fetch_and_store_reactions(self, message: Message):
         """Fetch actual users who reacted and store individually for engagement tracking"""
