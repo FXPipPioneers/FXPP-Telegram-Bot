@@ -380,17 +380,7 @@ class TelegramTradingBot:
                           api_id=TELEGRAM_API_ID,
                           api_hash=TELEGRAM_API_HASH,
                           bot_token=TELEGRAM_BOT_TOKEN,
-                          workdir=".")
-        
-        # Override with environment variables if provided
-        db_url = os.getenv("DATABASE_URL_OVERRIDE") or os.getenv("DATABASE_URL")
-        self.db_url = db_url
-        
-        self.owner_id = safe_int(os.getenv("BOT_OWNER_USER_ID_OVERRIDE") or os.getenv("BOT_OWNER_USER_ID", "6664440870"))
-
-        self.userbot = None
-        self.userbot_phone = os.getenv("USERBOT_PHONE", "")
-        self.awaiting_login_code = {}  # user_id -> phone_code_hash
+                          workdir=".") # Fix 2: Session storage enabled by providing workdir
         self.db_pool = None
         self.client_session = None
         self.last_online_time = None
@@ -399,90 +389,14 @@ class TelegramTradingBot:
         self.awaiting_price_input = {}
         self.awaiting_custom_pair = {}
         self.override_trade_mappings = {}  # menu_id -> {idx: message_id}
-        self.trial_pending_approvals = set()  # Track user IDs approved for trial
+        self.trial_pending_approvals = set(
+        )  # Track user IDs approved for trial
         self.last_warning_send_time = {}  # Track last warning send time per user_id
-        self.peer_id_check_state = {}  # Track peer ID checks
+        self.peer_id_check_state = {}  # Track peer ID checks: user_id -> {joined_at, delay_level, interval, established}
 
         self._register_handlers()
 
     def _register_handlers(self):
-
-        @self.app.on_message(filters.command("login") & filters.user(BOT_OWNER_USER_ID))
-        async def login_command(client, message: Message):
-            args = message.text.split()
-            subcommand = args[1] if len(args) > 1 else "menu"
-            
-            if subcommand == "status":
-                status = "🟢 Online" if self.userbot and self.userbot.is_connected else "🔴 Offline"
-                await message.reply(f"**Userbot Status:** {status}")
-                return
-
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔑 Start Login", callback_data="ub_start_login")],
-                [InlineKeyboardButton("📊 Check Status", callback_data="ub_check_status")]
-            ])
-            await message.reply("**Userbot Control Panel**\nManage your userbot connection here:", reply_markup=keyboard)
-
-        @self.app.on_callback_query(filters.regex("^ub_"))
-        async def userbot_callback(client, callback_query: CallbackQuery):
-            data = callback_query.data
-            user_id = callback_query.from_user.id
-            
-            if user_id != BOT_OWNER_USER_ID:
-                await callback_query.answer("Unauthorized", show_alert=True)
-                return
-
-            if data == "ub_start_login":
-                if not self.userbot_phone:
-                    await callback_query.message.edit_text("❌ `USERBOT_PHONE` not set in environment variables.")
-                    return
-                
-                await callback_query.message.edit_text("🔄 Initiating login... Sending code to your Telegram app.")
-                try:
-                    if not self.userbot:
-                        self.userbot = Client(
-                            "userbot_session",
-                            api_id=TELEGRAM_API_ID,
-                            api_hash=TELEGRAM_API_HASH,
-                            phone_number=self.userbot_phone,
-                            workdir="."
-                        )
-                    
-                    if not self.userbot.is_connected:
-                        await self.userbot.connect()
-                    
-                    code_info = await self.userbot.send_code(self.userbot_phone)
-                    self.awaiting_login_code[user_id] = code_info.phone_code_hash
-                    await callback_query.message.edit_text("📩 Code sent! Please reply with the code you received.")
-                except Exception as e:
-                    await callback_query.message.edit_text(f"❌ Error: {e}")
-
-            elif data == "ub_check_status":
-                status = "🟢 Online" if self.userbot and self.userbot.is_connected else "🔴 Offline"
-                await callback_query.message.edit_text(f"**Userbot Status:** {status}", reply_markup=callback_query.message.reply_markup)
-
-        @self.app.on_message(filters.private & filters.user(BOT_OWNER_USER_ID))
-        async def handle_owner_private_message(client, message: Message):
-            user_id = message.from_user.id
-            if user_id in self.awaiting_login_code:
-                code = message.text.strip()
-                hash = self.awaiting_login_code.pop(user_id)
-                await message.reply("🔄 Completing login...")
-                try:
-                    await self.userbot.sign_in(self.userbot_phone, hash, code)
-                except Exception:
-                    # If direct sign_in fails, it might be due to a state issue; ensure client is started
-                    if not self.userbot.is_connected:
-                        await self.userbot.start()
-                    await self.userbot.sign_in(self.userbot_phone, hash, code)
-                
-                session_string = await self.userbot.export_session_string()
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute("INSERT INTO bot_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2", "userbot_session_string", session_string)
-                await message.reply("✅ Userbot logged in and session saved to database!")
-                return
-
-            await self.handle_text_input(client, message)
 
         @self.app.on_message(filters.command("entry"))
         async def entry_command(client, message: Message):
@@ -654,7 +568,18 @@ class TelegramTradingBot:
 
     async def is_owner(self, user_id: int) -> bool:
         """Check if user is the bot owner"""
-        return user_id == self.owner_id
+        # Ensure we're comparing with the correct ID from env
+        owner_id = int(os.getenv("BOT_OWNER_USER_ID", "0"))
+        if owner_id == 0:
+            return False
+            
+        is_owner = user_id == owner_id
+        if not is_owner:
+            # Log failed owner checks for debugging
+            logger.debug(
+                f"Owner check failed: user {user_id} != owner {owner_id}"
+            )
+        return is_owner
 
     async def handle_group_message(self, client: Client, message: Message):
         """Handle messages in groups"""
@@ -3550,11 +3475,11 @@ class TelegramTradingBot:
                            ON CONFLICT (user_id) DO NOTHING''',
                         user.id, current_time)
                     
-                    # Track for peer ID verification (0 min delay, check every 1 min)
-                    next_check = current_time
+                    # Track for peer ID verification (30 min delay, check every 3 min)
+                    next_check = current_time + timedelta(minutes=3)
                     await conn.execute('''
                         INSERT INTO peer_id_checks (user_id, joined_at, current_delay_minutes, current_interval_minutes, next_check_at)
-                        VALUES ($1, $2, 0, 1, $3)
+                        VALUES ($1, $2, 30, 3, $3)
                         ON CONFLICT (user_id) DO NOTHING
                     ''', user.id, current_time, next_check)
                 
@@ -5291,21 +5216,19 @@ class TelegramTradingBot:
 
     async def escalate_peer_id_check(self, delay_level: int) -> tuple:
         """Get next delay and interval based on escalation level.
-        Level 0: 0 min delay, 1 min interval
-        Level 1: 5 min delay, 2 min interval
-        Level 2: 30 min delay, 5 min interval
-        Level 3: 60 min delay, 10 min interval
-        Level 4+: 24 hour limit, then give up
+        Level 0: 30 min delay, 3 min interval
+        Level 1: 1 hour delay, 10 min interval  
+        Level 2: 3 hour delay, 20 min interval
+        Level 3+: 24 hour limit, then give up
         """
         escalation = [
-            (0, 1),     # Level 0: Immediate, check every 1 min
-            (5, 2),     # Level 1: 5 min delay, check every 2 min
-            (30, 5),    # Level 2: 30 min delay, check every 5 min
-            (60, 10),   # Level 3: 1 hour delay, check every 10 min
+            (30, 3),    # Level 0: 30 min delay, check every 3 min
+            (60, 10),   # Level 1: 1 hour delay, check every 10 min
+            (180, 20),  # Level 2: 3 hours delay, check every 20 min
         ]
         if delay_level < len(escalation):
             return escalation[delay_level]
-        return (1440, 20)  # Level 4+: 24 hours (give up after this)
+        return (1440, 20)  # Level 3+: 24 hours (give up after this)
 
     async def peer_id_escalation_loop(self):
         """Background loop: escalate peer ID checks until established or 24 hours passed"""
@@ -5351,73 +5274,63 @@ class TelegramTradingBot:
                                 logger.warning(f"Peer ID check gave up for user {user_id} after 24 hours")
                                 continue
                             
-                            # Process successful peer discovery
-                            try:
-                                user_data = await self.app.get_users([user_id])
-                                first_name = user_data[0].first_name if user_data else "Trader"
-                                
-                                # Welcome DM (via Userbot helper)
-                                welcome_dm = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"]
-                                welcome_dm = welcome_dm.replace("{user_name}", first_name)
-                                
-                                await self.send_userbot_dm(user_id, "welcome_free", welcome_dm)
-                                await conn.execute('UPDATE peer_id_checks SET welcome_dm_sent = TRUE WHERE user_id = $1', user_id)
-                                await self.log_to_debug(f"✅ Welcome DM successfully sent to {first_name} (ID: {user_id}) - Peer ID established after {time_elapsed:.1f} hours", user_id=user_id)
-                            except Exception as e:
-                                await self.log_to_debug(f"❌ Peer ID established for user {user_id} but welcome DM failed: {e}", is_error=True, user_id=user_id)
-                        else:
-                            # Still not established - schedule next check based on delay progression
-                            delay_mins = row['current_delay_minutes']
-                            interval_mins = row['current_interval_minutes']
-                            
-                            # LOG FAILURE AT EACH INTERVAL
-                            await self.log_to_debug(f"⏳ Peer ID check failed for user {user_id} (Joined {time_elapsed:.1f}h ago). Next check in {interval_mins}m.", user_id=user_id)
-                            
-                            # Calculate time since join
-                            if time_elapsed < 1:
-                                delay_mins = 60
-                                interval_mins = 60
-                            elif time_elapsed < 4:
-                                delay_mins = 120
-                                interval_mins = 120
-                            else:
-                                delay_mins = 240
-                                interval_mins = 240
-
-                            next_check = datetime.now(pytz.utc) + timedelta(minutes=interval_mins)
-                            await conn.execute('''
-                                UPDATE peer_id_checks 
-                                SET last_check = CURRENT_TIMESTAMP,
-                                    next_check = $1,
-                                    current_delay_minutes = $2,
-                                    current_interval_minutes = $3
-                                WHERE user_id = $4
-                            ''', next_check, delay_mins, interval_mins, user_id)
-                            
-                            mins_since_join = (current_time - joined_at).total_seconds() / 60
-                            
-                            # Escalate if we've passed current delay threshold
-                            if mins_since_join >= delay_mins:
-                                # Move to next escalation level
-                                next_delay, next_interval = await self.escalate_peer_id_check(
-                                    [30, 60, 180].index(delay_mins) + 1 if delay_mins in [30, 60, 180] else 3
-                                )
-                                next_check = current_time + timedelta(minutes=next_interval)
-                                
+                            # Try peer ID check
+                            if await self.check_peer_id_established(user_id):
+                                # ... existing success logic ...
                                 await conn.execute('''
-                                    UPDATE peer_id_checks 
-                                    SET current_delay_minutes = $1, current_interval_minutes = $2, next_check_at = $3
-                                    WHERE user_id = $4
-                                ''', next_delay, next_interval, next_check, user_id)
+                                    UPDATE peer_id_checks SET peer_id_established = TRUE, established_at = $1
+                                    WHERE user_id = $2
+                                ''', current_time, user_id)
                                 
-                                if next_delay == 1440:
-                                    logger.warning(f"Peer ID check for user {user_id} escalated to 24-hour cycle (final attempt)")
+                                try:
+                                    user_data = await self.app.get_users([user_id])
+                                    first_name = user_data[0].first_name if user_data else "Trader"
+                                    
+                                    # Fix: Use correct nested dictionary keys for Welcome DM
+                                    welcome_dm = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"]
+                                    # Optional: replace {user_name} if template uses it
+                                    welcome_dm = welcome_dm.replace("{user_name}", first_name)
+                                    
+                                    await self.app.send_message(user_id, welcome_dm)
+                                    await conn.execute('UPDATE peer_id_checks SET welcome_dm_sent = TRUE WHERE user_id = $1', user_id)
+                                    await self.log_to_debug(f"✅ Welcome DM successfully sent to {first_name} (ID: {user_id}) - Peer ID established after {time_elapsed:.1f} hours", user_id=user_id)
+                                except Exception as e:
+                                    error_msg = str(e)
+                                    # Handle errors gracefully without resetting established status
+                                    await self.log_to_debug(f"❌ Peer ID established for user {user_id} but welcome DM failed: {e}", is_error=True, user_id=user_id)
                             else:
-                                # Same delay level, schedule next interval check
-                                next_check = current_time + timedelta(minutes=interval_mins)
-                                await conn.execute('''
-                                    UPDATE peer_id_checks SET next_check_at = $1 WHERE user_id = $2
-                                ''', next_check, user_id)
+                                # Still not established - schedule next check based on delay progression
+                                delay_mins = row['current_delay_minutes']
+                                interval_mins = row['current_interval_minutes']
+                                
+                                # LOG FAILURE AT EACH INTERVAL
+                                await self.log_to_debug(f"⏳ Peer ID check failed for user {user_id} (Joined {time_elapsed:.1f}h ago). Next check in {interval_mins}m.", user_id=user_id)
+                                
+                                # Calculate time since join
+                                mins_since_join = (current_time - joined_at).total_seconds() / 60
+                                
+                                # Escalate if we've passed current delay threshold
+                                if mins_since_join >= delay_mins:
+                                    # Move to next escalation level
+                                    next_delay, next_interval = await self.escalate_peer_id_check(
+                                        [30, 60, 180].index(delay_mins) + 1 if delay_mins in [30, 60, 180] else 3
+                                    )
+                                    next_check = current_time + timedelta(minutes=next_interval)
+                                    
+                                    await conn.execute('''
+                                        UPDATE peer_id_checks 
+                                        SET current_delay_minutes = $1, current_interval_minutes = $2, next_check_at = $3
+                                        WHERE user_id = $4
+                                    ''', next_delay, next_interval, next_check, user_id)
+                                    
+                                    if next_delay == 1440:
+                                        logger.warning(f"Peer ID check for user {user_id} escalated to 24-hour cycle (final attempt)")
+                                else:
+                                    # Same delay level, schedule next interval check
+                                    next_check = current_time + timedelta(minutes=interval_mins)
+                                    await conn.execute('''
+                                        UPDATE peer_id_checks SET next_check_at = $1 WHERE user_id = $2
+                                    ''', next_check, user_id)
                 
                 await asyncio.sleep(10)  # Check every 10 seconds for due checks
                 
@@ -5705,8 +5618,11 @@ class TelegramTradingBot:
 
             del AUTO_ROLE_CONFIG['active_members'][member_id]
 
-            expiry_msg = MESSAGE_TEMPLATES["Trial Status & Expiry"]["Trial Expired"]["message"]
-            await self.send_userbot_dm(int(member_id), "trial_expired", expiry_msg)
+            try:
+                expiry_msg = MESSAGE_TEMPLATES["Trial Status & Expiry"]["Trial Expired"]["message"]
+                await self.app.send_message(int(member_id), expiry_msg)
+            except Exception as e:
+                logger.error(f"Could not send expiry DM to {member_id}: {e}")
 
             await self.save_auto_role_config()
             logger.info(f"Trial expired for user {member_id}")
@@ -5810,86 +5726,35 @@ class TelegramTradingBot:
         except Exception:
             return False
 
-    async def send_userbot_dm(self, user_id: int, message_type: str, message_text: str):
-        """Helper to send DM via userbot with logging and safety"""
-        if not self.userbot or not self.userbot.is_connected:
-            # Fallback to main bot if userbot is offline
-            try:
-                await self.app.send_message(user_id, message_text)
-                await self.log_to_debug(f"ℹ️ Userbot offline, sent {message_type} via main bot to {user_id}")
-            except Exception as e:
-                logger.error(f"Failed to send fallback DM: {e}")
-            return
-
-        try:
-            # Human-like delay
-            await asyncio.sleep(random.randint(5, 15))
-            await self.userbot.send_message(user_id, message_text)
-            
-            # Log success
-            if self.db_pool:
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute(
-                        "INSERT INTO userbot_messages (user_id, message_type, status) VALUES ($1, $2, $3)",
-                        user_id, message_type, "success"
-                    )
-            await self.log_to_debug(f"✅ Userbot sent {message_type} to {user_id}")
-        except Exception as e:
-            logger.error(f"Userbot DM failed to {user_id}: {e}")
-            if self.db_pool:
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute(
-                        "INSERT INTO userbot_messages (user_id, message_type, status) VALUES ($1, $2, $3)",
-                        user_id, message_type, f"failed: {str(e)}"
-                    )
-            await self.log_to_debug(f"❌ Userbot failed to send {message_type} to {user_id}: {e}", is_error=True)
-
     async def send_24hr_warning(self, member_id: str):
         try:
             message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["24-Hour Warning"]["message"]
-            await self.send_userbot_dm(int(member_id), "24h_warning", message)
+            await self.app.send_message(int(member_id), message)
+            logger.info(f"✅ Sent 24-hour trial warning DM to user {member_id}")
+            await self.log_to_debug(f"✅ Sent 24-hour trial warning DM to user {member_id}", user_id=int(member_id))
+        except Exception as e:
+            error_msg = f"❌ Could not send 24-hour warning DM to {member_id}: {e}"
+            logger.error(error_msg)
+            message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["24-Hour Warning"]["message"]
+            await self.log_to_debug(error_msg, is_error=True, user_id=int(member_id), failed_message=message)
             if str(member_id) in AUTO_ROLE_CONFIG['active_members']:
                 AUTO_ROLE_CONFIG['active_members'][str(member_id)]['warning_24h_sent'] = True
                 await self.save_auto_role_config()
-        except Exception as e:
-            logger.error(f"Error in send_24hr_warning for {member_id}: {e}")
 
     async def send_3hr_warning(self, member_id: str):
         try:
             message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["3-Hour Warning"]["message"]
-            await self.send_userbot_dm(int(member_id), "3h_warning", message)
+            await self.app.send_message(int(member_id), message)
+            logger.info(f"✅ Sent 3-hour trial warning DM to user {member_id}")
+            await self.log_to_debug(f"✅ Sent 3-hour trial warning DM to user {member_id}", user_id=int(member_id))
+        except Exception as e:
+            error_msg = f"❌ Could not send 3-hour warning DM to {member_id}: {e}"
+            logger.error(error_msg)
+            message = MESSAGE_TEMPLATES["Free Trial Heads Up"]["3-Hour Warning"]["message"]
+            await self.log_to_debug(error_msg, is_error=True, user_id=int(member_id), failed_message=message)
             if str(member_id) in AUTO_ROLE_CONFIG['active_members']:
                 AUTO_ROLE_CONFIG['active_members'][str(member_id)]['warning_3h_sent'] = True
                 await self.save_auto_role_config()
-        except Exception as e:
-            logger.error(f"Error in send_3hr_warning for {member_id}: {e}")
-
-    async def send_followup_dm(self, member_id: str, days: int):
-        template_key = f"{days} Days After Trial Ends"
-        message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"][template_key]["message"]
-        await self.send_userbot_dm(int(member_id), f"{days}d_followup", message)
-
-    async def start_userbot(self):
-        """Initialize and start userbot from saved session"""
-        try:
-            async with self.db_pool.acquire() as conn:
-                session_string = await conn.fetchval("SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'")
-            
-            if session_string:
-                self.userbot = Client(
-                    "userbot_session_string",
-                    session_string=session_string,
-                    api_id=TELEGRAM_API_ID,
-                    api_hash=TELEGRAM_API_HASH,
-                    workdir=".",
-                    no_updates=True
-                )
-                await self.userbot.start()
-                logger.info("✅ Userbot started successfully from database session (Updates Disabled)")
-                await self.log_to_debug("✅ Userbot started successfully (Updates Disabled)")
-        except Exception as e:
-            logger.error(f"Failed to start userbot: {e}")
-            await self.log_to_debug(f"❌ Userbot startup failed: {e}", is_error=True)
 
     async def track_failed_welcome_dm(self, user_id: int, first_name: str, msg_type: str, message_content: str):
         """Track a failed welcome DM for retry"""
@@ -6043,9 +5908,31 @@ class TelegramTradingBot:
             return None
 
     async def send_followup_dm(self, member_id: str, days: int):
-        template_key = f"{days} Days After Trial Ends"
-        message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"][template_key]["message"]
-        await self.send_userbot_dm(int(member_id), f"{days}d_followup", message)
+        try:
+            if days == 3:
+                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["3 Days After Trial Ends"]["message"]
+            elif days == 7:
+                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["7 Days After Trial Ends"]["message"]
+            elif days == 14:
+                message = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["14 Days After Trial Ends"]["message"]
+            else:
+                return
+
+            await self.app.send_message(int(member_id), message)
+            logger.info(f"✅ Sent {days}-day follow-up DM to user {member_id}")
+            await self.log_to_debug(f"✅ Sent {days}-day follow-up DM to user {member_id}", user_id=int(member_id))
+        except Exception as e:
+            error_msg = f"❌ Could not send {days}-day follow-up DM to {member_id}: {e}"
+            logger.error(error_msg)
+            if days == 3:
+                msg = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["3 Days After Trial Ends"]["message"]
+            elif days == 7:
+                msg = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["7 Days After Trial Ends"]["message"]
+            elif days == 14:
+                msg = MESSAGE_TEMPLATES["3/7/14 Day Follow-ups"]["14 Days After Trial Ends"]["message"]
+            else:
+                msg = ""
+            await self.log_to_debug(error_msg, is_error=True, user_id=int(member_id), failed_message=msg)
 
     async def monday_activation_loop(self):
         await asyncio.sleep(60)
@@ -6065,7 +5952,12 @@ class TelegramTradingBot:
                                             'monday_notification_sent', False):
                                 try:
                                     activation_message = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Monday Activation (Weekend Delay)"]["message"]
-                                    await self.send_userbot_dm(int(member_id), "monday_activation", activation_message)
+                                    await self.app.send_message(
+                                        int(member_id), activation_message)
+                                    logger.info(
+                                        f"✅ Sent Monday activation DM to {member_id}"
+                                    )
+                                    await self.log_to_debug(f"✅ Sent Monday activation DM to {member_id}")
 
                                     AUTO_ROLE_CONFIG['active_members'][
                                         member_id][
@@ -6100,7 +5992,6 @@ class TelegramTradingBot:
                     BotCommand("peeridstatus", "Check if peer ID is connected for a user"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM statistics"),
-                    BotCommand("login", "Manage Userbot connection"),
                 ]
                 try:
                     await self.app.set_bot_commands(
@@ -6170,8 +6061,16 @@ class TelegramTradingBot:
 
     async def send_engagement_discount_dm(self, user_id: int):
         """Send 50% discount DM to engaged free group members."""
-        message = MESSAGE_TEMPLATES["Engagement & Offers"]["Engagement Discount (50% Off)"]["message"]
-        await self.send_userbot_dm(user_id, "engagement_discount", message)
+        try:
+            message = MESSAGE_TEMPLATES["Engagement & Offers"]["Engagement Discount (50% Off)"]["message"]
+            await self.app.send_message(user_id, message)
+            logger.info(f"✅ Sent engagement discount DM to user {user_id}")
+            await self.log_to_debug(f"✅ Sent engagement discount DM to user {user_id}", user_id=user_id)
+        except Exception as e:
+            error_msg = f"❌ Could not send engagement discount DM to {user_id}: {e}"
+            logger.error(error_msg)
+            message = MESSAGE_TEMPLATES["Engagement & Offers"]["Engagement Discount (50% Off)"]["message"]
+            await self.log_to_debug(error_msg, is_error=True, user_id=user_id, failed_message=message)
 
     async def daily_vip_trial_offer_loop(self):
         """Daily check at 09:00 Amsterdam time to offer VIP trial to free-only members.
@@ -6221,15 +6120,25 @@ class TelegramTradingBot:
 
                             if not is_in_vip:
                                 offer_message = MESSAGE_TEMPLATES["Engagement & Offers"]["Daily VIP Trial Offer"]["message"]
-                                await self.send_userbot_dm(user_id, "daily_trial_offer", offer_message)
                                 
-                                async with self.db_pool.acquire() as conn:
-                                    await conn.execute(
-                                        '''INSERT INTO trial_offer_history (user_id, offer_sent_date)
-                                           VALUES ($1, $2)
-                                           ON CONFLICT (user_id) DO UPDATE SET offer_sent_date = $2''',
-                                        user_id, current_time
-                                    )
+                                try:
+                                    await self.app.send_message(user_id, offer_message)
+                                    
+                                    async with self.db_pool.acquire() as conn:
+                                        await conn.execute(
+                                            '''INSERT INTO trial_offer_history (user_id, offer_sent_date)
+                                               VALUES ($1, $2)
+                                               ON CONFLICT (user_id) DO UPDATE SET offer_sent_date = $2''',
+                                            user_id, current_time
+                                        )
+                                    
+                                    logger.info(f"✅ Sent daily VIP trial offer DM to user {user_id}")
+                                    await self.log_to_debug(f"✅ Sent daily VIP trial offer DM to user {user_id}", user_id=user_id)
+                                except Exception as e:
+                                    error_msg = f"❌ Could not send daily trial offer DM to {user_id}: {e}"
+                                    logger.error(error_msg)
+                                    offer_message = MESSAGE_TEMPLATES["Engagement & Offers"]["Daily VIP Trial Offer"]["message"]
+                                    await self.log_to_debug(error_msg, is_error=True, user_id=user_id, failed_message=offer_message)
 
                     except Exception as e:
                         logger.error(f"Error in daily VIP trial offer check: {e}")
@@ -6246,106 +6155,21 @@ class TelegramTradingBot:
         """No-op: Cleared by user request to start fresh"""
         return
 
-    async def init_db_pool(self):
-        """Initialize the database connection pool"""
-        database_url = self.db_url
-        if not database_url:
-            logger.error("DATABASE_URL environment variable is not set")
-            raise ValueError("DATABASE_URL environment variable is required")
-        
-        # Add sslmode=require if it's not present and it's a neon/render DB
-        if "sslmode=" not in database_url:
-            if "?" in database_url:
-                database_url += "&sslmode=require"
-            else:
-                database_url += "?sslmode=require"
-        
-        try:
-            # Simplified for production stability
-            self.db_pool = await asyncpg.create_pool(
-                database_url,
-                min_size=1,
-                max_size=10
-            )
-            logger.info("Database connection pool initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize database pool: {e}")
-            raise
-
-    async def init_db_schema(self):
-        """Initialize database schema if tables don't exist"""
-        if not self.db_pool:
-            return
-            
-        try:
-            async with self.db_pool.acquire() as conn:
-                # Create bot_settings table
-                await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS bot_settings (
-                        setting_key TEXT PRIMARY KEY,
-                        setting_value TEXT
-                    )
-                ''')
-                
-                # Create peer_id_checks table
-                await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS peer_id_checks (
-                        user_id BIGINT PRIMARY KEY,
-                        joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        peer_id_established BOOLEAN DEFAULT FALSE,
-                        welcome_dm_sent BOOLEAN DEFAULT FALSE,
-                        current_delay_minutes INTEGER DEFAULT 0,
-                        current_interval_minutes INTEGER DEFAULT 1,
-                        next_check_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        last_check TIMESTAMP WITH TIME ZONE
-                    )
-                ''')
-                
-                # Create other necessary tables (simplified for startup)
-                await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS free_group_joins (
-                        user_id BIGINT PRIMARY KEY,
-                        joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        discount_sent BOOLEAN DEFAULT FALSE
-                    )
-                ''')
-                
-                await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS pending_welcome_dms (
-                        user_id BIGINT PRIMARY KEY,
-                        first_name TEXT,
-                        message_type TEXT,
-                        message_content TEXT,
-                        failed_attempts INTEGER DEFAULT 0,
-                        last_attempt TIMESTAMP WITH TIME ZONE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-                
-                logger.info("Database schema verified/initialized")
-        except Exception as e:
-            logger.error(f"Error initializing database schema: {e}")
-            raise
-
     async def run(self):
-        await self.init_db_pool()
-        await self.init_db_schema()
-        
-        # New startup logic with userbot
-        await self.app.start()
-        await self.start_userbot()
-        
-        # Start background tasks
-        asyncio.create_task(self.price_tracking_loop())
-        asyncio.create_task(self.trial_expiry_loop())
-        asyncio.create_task(self.preexpiration_warning_loop())
-        asyncio.create_task(self.followup_dm_loop())
-        asyncio.create_task(self.retry_failed_welcome_dms_loop())
-        asyncio.create_task(self.monday_activation_loop())
-        asyncio.create_task(self.engagement_tracking_loop())
-        asyncio.create_task(self.daily_vip_trial_offer_loop())
+        await self.init_database()
 
+        # One-time cleanup of old data on next startup on Render
+        if self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute("TRUNCATE TABLE peer_id_checks, active_members, dm_schedule RESTART IDENTITY CASCADE;")
+                    logger.info("📊 DATABASE: Old user records cleared on startup.")
+            except Exception as e:
+                logger.error(f"Failed to clear database on startup: {e}")
+
+        await self.app.start()
         logger.info("Telegram bot started!")
+
         await self.register_bot_commands()
 
         if DEBUG_GROUP_ID:
