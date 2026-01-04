@@ -379,7 +379,8 @@ class TelegramTradingBot:
         self.app = Client("trading_bot",
                           api_id=TELEGRAM_API_ID,
                           api_hash=TELEGRAM_API_HASH,
-                          bot_token=TELEGRAM_BOT_TOKEN)
+                          bot_token=TELEGRAM_BOT_TOKEN,
+                          workdir=".") # Fix 2: Session storage enabled by providing workdir
         self.db_pool = None
         self.client_session = None
         self.last_online_time = None
@@ -3457,6 +3458,15 @@ class TelegramTradingBot:
         if self.db_pool:
             try:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+                
+                # FIX 1: Forced Resolution - Immediately try to get member info to prime cache
+                try:
+                    await client.get_chat_member(FREE_GROUP_ID, user.id)
+                    # ALSO immediately attempt to establish a Peer ID globally
+                    await client.get_users([user.id])
+                except Exception as e:
+                    logger.debug(f"Forced resolution/global fetch failed for {user.id}: {e}")
+
                 async with self.db_pool.acquire() as conn:
                     # Track for engagement
                     await conn.execute(
@@ -5196,9 +5206,12 @@ class TelegramTradingBot:
     async def check_peer_id_established(self, user_id: int) -> bool:
         """Attempt to verify peer ID is established by checking if we can interact with the user"""
         try:
+            # Feature 1: Global Resolve - try to fetch user details from Telegram servers
+            # This is the most reliable way to get the access hash
             await self.app.get_users([user_id])
             return True
         except Exception:
+            # Feature 3: Wait strategy is handled by the escalation loop calling this
             return False
 
     async def escalate_peer_id_check(self, delay_level: int) -> tuple:
@@ -5272,7 +5285,12 @@ class TelegramTradingBot:
                                 try:
                                     user_data = await self.app.get_users([user_id])
                                     first_name = user_data[0].first_name if user_data else "Trader"
-                                    welcome_dm = MESSAGE_TEMPLATES["Engagement & Offers"]["Welcome (Free Group)"]["message"]
+                                    
+                                    # Fix: Use correct nested dictionary keys for Welcome DM
+                                    welcome_dm = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"]
+                                    # Optional: replace {user_name} if template uses it
+                                    welcome_dm = welcome_dm.replace("{user_name}", first_name)
+                                    
                                     await self.app.send_message(user_id, welcome_dm)
                                     await conn.execute('UPDATE peer_id_checks SET welcome_dm_sent = TRUE WHERE user_id = $1', user_id)
                                     await self.log_to_debug(f"✅ Welcome DM successfully sent to {first_name} (ID: {user_id}) - Peer ID established after {time_elapsed:.1f} hours", user_id=user_id)
