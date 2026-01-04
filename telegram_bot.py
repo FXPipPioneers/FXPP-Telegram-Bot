@@ -5397,6 +5397,7 @@ class TelegramTradingBot:
                                     current_interval_minutes = $3
                                 WHERE user_id = $4
                             ''', next_check, delay_mins, interval_mins, user_id)
+                            
                             mins_since_join = (current_time - joined_at).total_seconds() / 60
                             
                             # Escalate if we've passed current delay threshold
@@ -6247,6 +6248,27 @@ class TelegramTradingBot:
     async def ensure_active_trial_peers(self):
         """No-op: Cleared by user request to start fresh"""
         return
+
+    async def init_db_pool(self):
+        """Initialize the database connection pool"""
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            logger.error("DATABASE_URL environment variable is not set")
+            raise ValueError("DATABASE_URL environment variable is required")
+        
+        # Add sslmode=require if it's not present and it's a neon/render DB
+        if "sslmode=" not in database_url:
+            if "?" in database_url:
+                database_url += "&sslmode=require"
+            else:
+                database_url += "?sslmode=require"
+        
+        try:
+            self.db_pool = await asyncpg.create_pool(database_url)
+            logger.info("Database connection pool initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize database pool: {e}")
+            raise
 
     async def run(self):
         await self.init_db_pool()
