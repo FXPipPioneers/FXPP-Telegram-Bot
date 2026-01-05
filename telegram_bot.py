@@ -399,9 +399,15 @@ class TelegramTradingBot:
                 async def _init_pool():
                     for attempt in range(5):
                         try:
+                            # Re-create context inside the function or pass it in
+                            import ssl
+                            local_ctx = ssl.create_default_context()
+                            local_ctx.check_hostname = False
+                            local_ctx.verify_mode = ssl.CERT_NONE
+                            
                             self.db_pool = await asyncpg.create_pool(
                                 db_url, 
-                                ssl=ctx
+                                ssl=local_ctx
                             )
                             print("Database pool successfully initialized")
                             return
@@ -620,7 +626,9 @@ class TelegramTradingBot:
 
     async def handle_login_setup(self, client, message: Message):
         """Initiate Userbot Setup (Login)"""
+        logger.info(f"handle_login_setup triggered by {message.from_user.id}")
         if not self.db_pool:
+            logger.error("Database pool not initialized")
             await message.reply("❌ Database connection not available.")
             return
 
@@ -629,24 +637,45 @@ class TelegramTradingBot:
         api_id = safe_int(os.getenv("USERBOT_API_ID", "0"))
         api_hash = os.getenv("USERBOT_API_HASH", "")
 
+        logger.info(f"Using Phone: {phone}, API_ID: {api_id}")
+
         if not phone or not api_id or not api_hash:
-            await message.reply("❌ Userbot credentials missing in environment variables.")
+            logger.error("Userbot credentials missing in environment")
+            await message.reply(
+                "❌ **Userbot credentials missing.**\n\n"
+                "Please ensure `USERBOT_PHONE`, `USERBOT_API_ID`, and `USERBOT_API_HASH` "
+                "are set in your Render environment variables."
+            )
             return
 
-        await message.reply(f"🔄 **Starting Userbot Login** for `{phone}`...\nRequesting code from Telegram...")
+        msg = await message.reply(f"🔄 **Starting Userbot Login** for `{phone}`...\nRequesting code from Telegram...")
 
         try:
+            # Cleanup previous state if any
+            if user_id in self.userbot_login_state:
+                logger.info(f"Cleaning up old login state for {user_id}")
+                try:
+                    await self.userbot_login_state[user_id]["client"].disconnect()
+                except:
+                    pass
+                del self.userbot_login_state[user_id]
+
             # Create a temporary client for login
+            logger.info("Initializing temporary Pyrogram client")
             temp_client = Client(
                 name=f"temp_userbot_{user_id}",
                 api_id=api_id,
                 api_hash=api_hash,
                 in_memory=True
             )
+            
+            logger.info("Connecting to Telegram...")
             await temp_client.connect()
             
+            logger.info("Sending code...")
             # Request phone code
             code_info = await temp_client.send_code(phone)
+            logger.info(f"Code sent successfully. Hash: {code_info.phone_code_hash}")
             
             self.userbot_login_state[user_id] = {
                 "client": temp_client,
@@ -654,12 +683,13 @@ class TelegramTradingBot:
                 "phone_code_hash": code_info.phone_code_hash
             }
 
-            await message.reply(
+            await msg.edit_text(
                 "📩 **Code Sent!**\n\nPlease check your Telegram account for the 5-digit verification code and reply with it here.\n\n"
                 "**Format:** Just send the 5 digits (e.g., `12345`)."
             )
         except Exception as e:
-            await message.reply(f"❌ Failed to initiate login: {str(e)}")
+            logger.exception("Failed to initiate userbot login")
+            await msg.edit_text(f"❌ **Failed to initiate login:**\n`{str(e)}`")
             if user_id in self.userbot_login_state:
                 del self.userbot_login_state[user_id]
 
