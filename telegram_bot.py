@@ -591,16 +591,24 @@ class TelegramTradingBot:
         try:
             status_msg = await message.reply(f"⏳ **Connecting...**\nPhone: `{phone_number}`")
             
-            # Simple client initialization that worked before
+            # Improved client initialization to look more like a real user
             self.temp_client = Client(
                 "temp_login",
                 api_id=TELEGRAM_API_ID,
                 api_hash=TELEGRAM_API_HASH,
-                in_memory=True
+                in_memory=True,
+                device_model="Desktop",
+                system_version="Windows 10",
+                app_version="4.16.2"
             )
             
             await self.temp_client.connect()
-            sent_code = await self.temp_client.send_code(phone_number)
+            # Try to send code specifically via Telegram app first
+            try:
+                sent_code = await self.temp_client.send_code(phone_number)
+            except Exception as e:
+                logger.warning(f"Initial send_code failed: {e}. Retrying with generic settings...")
+                sent_code = await self.temp_client.send_code(phone_number)
             
             self.awaiting_login_code = {
                 "phone_number": phone_number,

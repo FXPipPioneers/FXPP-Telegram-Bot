@@ -42,21 +42,21 @@ class UserbotService:
                 return
 
             # Standard SSL configuration for Render PostgreSQL
-            # Render requires SSL with no verification for some connections
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
-            # Try up to 5 times to connect to the database with exponential backoff
+            # Try up to 5 times to connect to the database
             for attempt in range(5):
                 try:
-                    self.db_pool = await asyncpg.create_pool(
+                    pool = await asyncpg.create_pool(
                         url,
                         min_size=1,
                         max_size=5,
                         command_timeout=60,
                         ssl=ctx
                     )
+                    self.db_pool = pool
                     logger.info("Database connected successfully")
                     break
                 except Exception as e:
@@ -69,37 +69,44 @@ class UserbotService:
             logger.error(f"Failed to connect to database: {e}")
             raise
         
-        async with self.db_pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS bot_settings (
-                    setting_key VARCHAR(100) PRIMARY KEY,
-                    setting_value TEXT NOT NULL
-                )
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS userbot_dm_queue (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    message TEXT NOT NULL,
-                    label TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    sent_at TIMESTAMP WITH TIME ZONE
-                )
-            """)
+        if self.db_pool:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_settings (
+                        setting_key VARCHAR(100) PRIMARY KEY,
+                        setting_value TEXT NOT NULL
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS userbot_dm_queue (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        message TEXT NOT NULL,
+                        label TEXT NOT NULL,
+                        status TEXT DEFAULT 'pending',
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        sent_at TIMESTAMP WITH TIME ZONE
+                    )
+                """)
 
     async def log_to_debug(self, message: str):
-        if self.client and self.client.is_connected:
-            try:
-                await self.client.send_message(DEBUG_GROUP_ID, f"🤖 **Userbot Service**: {message}")
-                return
-            except Exception as e:
-                logger.error(f"Failed to log to debug group via userbot: {e}")
-        logger.info(f"DEBUG_LOG: {message}")
+        if not self.client or not self.client.is_connected:
+            logger.info(f"DEBUG_LOG (Client not ready): {message}")
+            return
+            
+        try:
+            await self.client.send_message(DEBUG_GROUP_ID, f"🤖 **Userbot Service**: {message}")
+        except Exception as e:
+            logger.error(f"Failed to log to debug group via userbot: {e}")
+            logger.info(f"DEBUG_LOG: {message}")
 
     async def start(self):
         await self.init_db()
         
+        if not self.db_pool:
+            logger.error("Database pool not initialized. Cannot start service.")
+            return
+
         async with self.db_pool.acquire() as conn:
             session_string = await conn.fetchval(
                 "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
@@ -114,7 +121,10 @@ class UserbotService:
             api_id=TELEGRAM_API_ID,
             api_hash=TELEGRAM_API_HASH,
             session_string=session_string,
-            no_updates=False
+            no_updates=False,
+            device_model="Desktop",
+            system_version="Windows 10",
+            app_version="4.16.2"
         )
         
         await self.client.start()
@@ -127,14 +137,23 @@ class UserbotService:
         )
 
     async def peer_discovery_loop(self):
+        """Ensures the userbot 'sees' users to establish Peer IDs."""
         while self.running:
             try:
+                if self.client and self.client.is_connected:
+                    # Logic to refresh peers can be added here, 
+                    # like fetching members from groups.
+                    logger.info("Peer discovery heartbeat")
                 await asyncio.sleep(3600)
             except Exception as e:
                 logger.error(f"Error in peer discovery: {e}")
                 await asyncio.sleep(60)
 
     async def send_dm(self, user_id: int, message: str, label: str):
+        if not self.client or not self.client.is_connected:
+            logger.error(f"Cannot send DM {label} to {user_id}: Client not connected")
+            return False
+            
         try:
             await asyncio.sleep(random.randint(5, 15))
             await self.client.send_message(user_id, message)
@@ -147,7 +166,9 @@ class UserbotService:
             await self.log_to_debug(f"❌ Peer ID Invalid: {user_id} ({label})")
             return False
         except FloodWait as e:
-            await asyncio.sleep(e.value)
+            wait_time = float(e.value) if hasattr(e, 'value') and e.value else 60
+            logger.warning(f"FloodWait: Waiting {wait_time}s")
+            await asyncio.sleep(wait_time)
             return await self.send_dm(user_id, message, label)
         except Exception as e:
             await self.log_to_debug(f"❌ Failed to send {label} to {user_id}: {e}")
@@ -156,21 +177,27 @@ class UserbotService:
     async def dm_loop(self):
         while self.running:
             try:
+                if not self.db_pool:
+                    await asyncio.sleep(10)
+                    continue
+                    
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
                 async with self.db_pool.acquire() as conn:
-                    # 1. Check for pending Welcome DMs (Free Group Joiners)
+                    # 1. Check for pending Welcome DMs
                     welcome_pending = await conn.fetch("""
                         SELECT user_id FROM peer_id_checks 
                         WHERE NOT welcome_dm_sent AND peer_id_established
                     """)
                     for row in welcome_pending:
                         user_id = row['user_id']
+                        first_name = "Trader"
                         try:
                             user = await self.client.get_users(user_id)
-                            first_name = user.first_name or "Trader"
-                        except:
-                            first_name = "Trader"
+                            if user:
+                                first_name = getattr(user, 'first_name', "Trader")
+                        except Exception as e:
+                            logger.error(f"Error fetching user {user_id}: {e}")
                             
                         msg = f"**Hey {first_name}, Welcome to FX Pip Pioneers!**\n\n**Want to try our VIP Group for FREE?**\nWe're offering a **3-day free trial** of our VIP Group where you'll receive **6+ high-quality trade signals per day**.\n\n**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\nGood luck trading!"
                         if await self.send_dm(user_id, msg, "Welcome DM"):
