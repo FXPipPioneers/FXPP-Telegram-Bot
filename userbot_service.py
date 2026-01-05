@@ -122,9 +122,9 @@ class UserbotService:
             api_hash=TELEGRAM_API_HASH,
             session_string=session_string,
             no_updates=False,
-            device_model="Desktop",
-            system_version="Windows 10",
-            app_version="4.16.2"
+            device_model="fxppbott",
+            system_version="Linux 6.8.0-1043-aws",
+            app_version="2.0.106"
         )
         
         await self.client.start()

@@ -678,19 +678,29 @@ class TelegramTradingBot:
             
             logger.info("Sending code...")
             # Request phone code
-            code_info = await temp_client.send_code(phone)
-            logger.info(f"Code sent successfully. Hash: {code_info.phone_code_hash}")
-            
-            self.userbot_login_state[user_id] = {
-                "client": temp_client,
-                "phone": phone,
-                "phone_code_hash": code_info.phone_code_hash
-            }
+            try:
+                code_info = await temp_client.send_code(phone)
+                logger.info(f"Code sent successfully. Hash: {code_info.phone_code_hash}")
+                
+                self.userbot_login_state[user_id] = {
+                    "client": temp_client,
+                    "phone": phone,
+                    "phone_code_hash": code_info.phone_code_hash
+                }
 
-            await msg.edit_text(
-                "📩 **Code Sent!**\n\nPlease check your Telegram account for the 5-digit verification code and reply with it here.\n\n"
-                "**Format:** Just send the 5 digits (e.g., `12345`)."
-            )
+                await msg.edit_text(
+                    "📩 **Code Sent!**\n\nPlease check your Telegram account for the 5-digit verification code and reply with it here.\n\n"
+                    "**Format:** Just send the 5 digits (e.g., `12345`)."
+                )
+            except FloodWait as e:
+                logger.error(f"FloodWait: {e.value} seconds")
+                await msg.edit_text(f"⚠️ **Telegram Rate Limit:** Please wait {e.value} seconds before trying again.")
+                await temp_client.disconnect()
+            except Exception as e:
+                logger.error(f"Error sending code: {e}")
+                await msg.edit_text(f"❌ **Failed to send code:** `{str(e)}`")
+                await temp_client.disconnect()
+
         except Exception as e:
             logger.exception("Failed to initiate userbot login")
             await msg.edit_text(f"❌ **Failed to initiate login:**\n`{str(e)}`")
@@ -4543,16 +4553,6 @@ class TelegramTradingBot:
                 logger.error(
                     f"Failed to send breakeven notification without reply: {e2}"
                 )
-
-    async def handle_login_setup(self, client, message: Message):
-        """Initiate the Userbot login process via command"""
-        user_id = message.from_user.id if message.from_user else BOT_OWNER_USER_ID
-        if not await self.is_owner(user_id):
-            return
-        
-        # Ensure we're using the correct message object for replies
-        # If it's a callback query message, it's already set
-        await self.initiate_login_flow(message)
 
     async def handle_login_status(self, client, message: Message):
         """Check the status of the Userbot service"""
