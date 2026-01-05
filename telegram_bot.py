@@ -599,9 +599,13 @@ class TelegramTradingBot:
             # Check if we're waiting for a login code
             if await self.process_userbot_code(client, message):
                 logger.info(f"Login code processed for {user_id}")
+                await self.log_to_debug(f"✅ SUCCESS: Login code '{message.text}' processed for {user_id}")
                 # Stop propagation if handled
                 message.stop_propagation()
                 return
+
+            # RE-ADD TARGETED LOGGING FOR OWNER MESSAGES
+            await self.log_to_debug(f"📊 DEBUG: Message from owner: {message.text[:50]}")
 
             # Handle pair input for /entry
             if user_id in self.awaiting_custom_pair:
@@ -774,18 +778,25 @@ class TelegramTradingBot:
             return True
 
         await message.reply("⏳ **Verifying code and generating session...**")
+        await self.log_to_debug(f"🔍 DEBUG: Starting sign_in for {user_id} with code {code}")
         
         try:
             temp_client = state["client"]
+            logger.info(f"Attempting sign_in for phone {state['phone']} with hash {state['phone_code_hash']}")
+            
             await temp_client.sign_in(
                 phone_number=state["phone"],
                 phone_code_hash=state["phone_code_hash"],
                 phone_code=code
             )
             
+            logger.info("Sign-in successful. Exporting session string...")
+            await self.log_to_debug("✅ DEBUG: sign_in successful. Exporting session...")
+            
             session_string = await temp_client.export_session_string()
             
             # Save session to database
+            logger.info("Saving session to database...")
             async with self.db_pool.acquire() as conn:
                 await conn.execute(
                     "INSERT INTO bot_settings (setting_key, setting_value) "
@@ -802,8 +813,23 @@ class TelegramTradingBot:
             return True
             
         except Exception as e:
-            await message.reply(f"❌ Login failed: {str(e)}")
-            await temp_client.disconnect()
+            error_msg = str(e)
+            logger.error(f"Login failed for {user_id}: {error_msg}", exc_info=True)
+            await message.reply(f"❌ Login failed: {error_msg}")
+            await self.log_to_debug(f"❌ DEBUG ERROR: sign_in failed for {user_id}. Error: {error_msg}")
+            
+            # Detailed error handling for common Telegram errors
+            if "PHONE_CODE_INVALID" in error_msg:
+                await self.log_to_debug("💡 TIP: The code you provided is incorrect. Please check the code in your Telegram app and try again.")
+            elif "PHONE_CODE_EXPIRED" in error_msg:
+                await self.log_to_debug("💡 TIP: The code has expired. Please run /login setup again to get a new code.")
+            elif "SESSION_PASSWORD_NEEDED" in error_msg:
+                await self.log_to_debug("⚠️ ALERT: Two-Step Verification is enabled on this account. The current implementation does not handle 2FA passwords yet.")
+
+            try:
+                await temp_client.disconnect()
+            except:
+                pass
             del self.userbot_login_state[user_id]
             return True
 
