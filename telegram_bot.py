@@ -661,12 +661,16 @@ class TelegramTradingBot:
                 del self.userbot_login_state[user_id]
 
             # Create a temporary client for login
-            logger.info("Initializing temporary Pyrogram client")
+            logger.info("Initializing temporary Pyrogram client with official device info")
             temp_client = Client(
                 name=f"temp_userbot_{user_id}",
                 api_id=api_id,
                 api_hash=api_hash,
-                in_memory=True
+                in_memory=True,
+                device_model="fxppbott",
+                system_version="Linux 6.8.0-1043-aws",
+                app_version="2.0.106",
+                lang_code="en"
             )
             
             logger.info("Connecting to Telegram...")
