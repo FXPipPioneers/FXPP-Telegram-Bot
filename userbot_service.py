@@ -71,6 +71,12 @@ class UserbotService:
         
         async with self.db_pool.acquire() as conn:
             await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    setting_key VARCHAR(100) PRIMARY KEY,
+                    setting_value TEXT NOT NULL
+                )
+            """)
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS userbot_dm_queue (
                     id SERIAL PRIMARY KEY,
                     user_id BIGINT NOT NULL,
