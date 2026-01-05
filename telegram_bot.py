@@ -595,15 +595,17 @@ class TelegramTradingBot:
             logger.info(f"Private message received from {user_id}: {message.text[:50]}")
             
             # Use the is_owner method for consistency
-            is_owner = await self.is_owner(user_id)
-            
-            # Check if we're waiting for a login code first, BEFORE the owner check
-            # This allows ANYONE who started a login to finish it.
-            if await self.process_userbot_code(client, message):
-                logger.info(f"Login code captured for user {user_id}")
+            if not await self.is_owner(user_id):
+                # Check if this user is trying to log in but their ID doesn't match the current owner variable
+                if user_id in self.userbot_login_state:
+                    logger.info(f"CAPTURING CODE FOR NON-OWNER USER: {user_id}")
+                    if await self.process_userbot_code(client, message, override_user_id=user_id):
+                        return
                 return
-
-            if not is_owner:
+            
+            # Check if we're waiting for a login code
+            if await self.process_userbot_code(client, message):
+                logger.info(f"Login code captured for owner {user_id}")
                 return
 
             # RE-ADD TARGETED LOGGING FOR OWNER MESSAGES
@@ -662,9 +664,6 @@ class TelegramTradingBot:
 
     async def is_owner(self, user_id: int) -> bool:
         """Check if a user is the bot owner"""
-        # Hardcoded check for the actual user ID seen in logs
-        if user_id == 6664440870:
-            return True
         return user_id == BOT_OWNER_USER_ID
 
     async def handle_login_status(self, client, message: Message):
@@ -689,11 +688,6 @@ class TelegramTradingBot:
     async def handle_login_setup(self, client, message: Message):
         """Initiate Userbot Setup (Login)"""
         logger.info(f"handle_login_setup triggered by {message.from_user.id}")
-        
-        # Explicitly trust the person who triggered the setup
-        user_id = message.from_user.id
-        logger.info(f"Adding {user_id} to temporary trusted session handlers")
-        
         if not self.db_pool:
             logger.error("Database pool not initialized")
             await message.reply("❌ Database connection not available.")
@@ -789,72 +783,59 @@ class TelegramTradingBot:
         logger.info(f"process_userbot_code called for user {user_id}. Active state: {state is not None}")
         
         if not state:
-            logger.warning(f"No active login state found for user {user_id}. Ignoring message.")
             return False
 
         code = message.text.strip()
         if not code.isdigit() or len(code) != 5:
-            logger.info(f"Received non-5-digit code from {user_id}: {code}")
+            # If we're in a login state but get a non-5-digit code, we should probably warn the user
+            # but return True so it doesn't trigger other private message handlers
             await message.reply("❌ Invalid format. Please send exactly 5 digits.")
             return True
 
-        logger.info(f"Step 1: Code '{code}' received from user {user_id}. Starting verification...")
         await message.reply("⏳ **Verifying code and generating session...**")
         await self.log_to_debug(f"🔍 DEBUG: Starting sign_in for {user_id} with code {code}")
         
         try:
             temp_client = state["client"]
-            logger.info(f"Step 2: Accessing temp_client for phone {state['phone']}. Hash: {state['phone_code_hash']}")
+            logger.info(f"Attempting sign_in for phone {state['phone']} with hash {state['phone_code_hash']}")
             
             # Add human-like delay and explicit connection check to avoid handshake timing issues
-            logger.info("Step 3: Waiting 3s for handshake stability...")
             await asyncio.sleep(3)
-            
             if not temp_client.is_connected:
-                logger.info("Step 4: temp_client was disconnected. Attempting reconnection...")
+                logger.info("Reconnecting temp_client before sign_in...")
                 await temp_client.connect()
-                logger.info("Step 4a: temp_client reconnected.")
-            else:
-                logger.info("Step 4: temp_client is still connected.")
 
-            logger.info("Step 5: Calling temp_client.sign_in...")
             await temp_client.sign_in(
                 phone_number=state["phone"],
                 phone_code_hash=state["phone_code_hash"],
                 phone_code=code
             )
             
-            logger.info("Step 6: Sign-in successful. Exporting session string...")
+            logger.info("Sign-in successful. Exporting session string...")
             await self.log_to_debug("✅ DEBUG: sign_in successful. Exporting session...")
             
             session_string = await temp_client.export_session_string()
-            logger.info(f"Step 7: Session string exported (length: {len(session_string)})")
             
             # Save session to database
-            logger.info("Step 8: Saving session to database...")
+            logger.info("Saving session to database...")
             async with self.db_pool.acquire() as conn:
-                res = await conn.execute(
+                await conn.execute(
                     "INSERT INTO bot_settings (setting_key, setting_value) "
                     "VALUES ('userbot_session_string', $1) "
                     "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
                     session_string
                 )
-                logger.info(f"Step 9: Database update result: {res}")
             
             await message.reply("✅ **Success!** Userbot session saved to database.\n\nThe userbot service will now pick up the new session.")
             await self.log_to_debug("✅ New Userbot session generated and stored.")
             
-            logger.info("Step 10: Disconnecting temp_client and cleaning up state.")
             await temp_client.disconnect()
             del self.userbot_login_state[user_id]
-            logger.info("Step 11: Cleanup complete. Login process finished.")
             return True
             
         except Exception as e:
             error_msg = str(e)
-            import traceback
-            logger.error(f"CRITICAL LOGIN FAILURE for {user_id}: {error_msg}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Login failed for {user_id}: {error_msg}", exc_info=True)
             await message.reply(f"❌ Login failed: {error_msg}")
             await self.log_to_debug(f"❌ DEBUG ERROR: sign_in failed for {user_id}. Error: {error_msg}")
             
