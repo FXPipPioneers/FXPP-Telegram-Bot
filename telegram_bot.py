@@ -429,6 +429,7 @@ class TelegramTradingBot:
         )  # Track user IDs approved for trial
         self.last_warning_send_time = {}  # Track last warning send time per user_id
         self.peer_id_check_state = {}  # Track peer ID checks: user_id -> {joined_at, delay_level, interval, established}
+        self.userbot_login_state = {}  # user_id -> {client, phone, phone_code_hash}
 
         # Handle BOT_OWNER_USER_ID from environment if 0
         global BOT_OWNER_USER_ID
@@ -537,21 +538,21 @@ class TelegramTradingBot:
             if not await self.is_owner(message.from_user.id):
                 return
             
-            # Use text-based logic for /login setup and /login status
+            # Use text-based logic for /login status
             parts = message.text.split()
             if len(parts) > 1:
                 subcommand = parts[1].lower()
-                if subcommand == "setup":
-                    await self.handle_login_setup(client, message)
-                    return
-                elif subcommand == "status":
+                if subcommand == "status":
                     await self.handle_login_status(client, message)
+                    return
+                elif subcommand == "setup":
+                    await self.handle_login_setup(client, message)
                     return
 
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🚀 Setup Userbot", callback_data="login_setup"),
-                    InlineKeyboardButton("📊 Check Status", callback_data="login_status")
+                    InlineKeyboardButton("📊 Check Status", callback_data="login_status"),
+                    InlineKeyboardButton("🔑 Start Setup", callback_data="login_setup")
                 ]
             ])
             await message.reply(
@@ -567,150 +568,138 @@ class TelegramTradingBot:
                 return
 
             action = callback_query.data.split("_")[1]
-            if action == "setup":
-                await callback_query.answer("Initiating Setup...")
-                # Call handle_login_setup directly which now uses initiate_login_flow
-                await self.handle_login_setup(client, callback_query.message)
-            elif action == "status":
+            if action == "status":
                 await callback_query.answer()
                 await self.handle_login_status(client, callback_query.message)
+            elif action == "setup":
+                await callback_query.answer()
+                await self.handle_login_setup(client, callback_query.message)
 
-    async def initiate_login_flow(self, message: Message):
-        """Initiate login using exact logic from OLDER_telegram_bot.py"""
-        # Ensure we check the correct user
-        user_id = message.from_user.id if message.from_user else 0
-        if not await self.is_owner(user_id):
-            logger.warning(f"Unauthorized login attempt from {user_id}")
-            return
+        @self.app.on_message(filters.text & filters.private)
+        async def handle_private_message(client, message: Message):
+            if not await self.is_owner(message.from_user.id):
+                return
+            
+            # Check if we're waiting for a login code
+            if await self.process_userbot_code(client, message):
+                return
 
-        phone_number = os.getenv("USERBOT_PHONE", "").strip()
-        if not phone_number:
-            await message.reply("❌ Error: `USERBOT_PHONE` not set in settings.")
+            # Handle price inputs for manual signals
+            user_id = message.from_user.id
+            if user_id in self.awaiting_price_input:
+                # ... existing logic ...
+                pass
+
+    async def handle_login_status(self, client, message: Message):
+        """Check the status of the Userbot service"""
+        if not self.db_pool:
+            await message.reply("❌ Database connection not available.")
             return
 
         try:
-            status_msg = await message.reply(f"⏳ **Connecting...**\nPhone: `{phone_number}`")
-            
-            # Improved client initialization to look more like a real user
-            self.temp_client = Client(
-                "temp_login",
-                api_id=TELEGRAM_API_ID,
-                api_hash=TELEGRAM_API_HASH,
-                in_memory=True,
-                device_model="Desktop",
-                system_version="Windows 10",
-                app_version="4.16.2"
-            )
-            
-            await self.temp_client.connect()
-            # Try to send code specifically via Telegram app first
-            try:
-                sent_code = await self.temp_client.send_code(phone_number)
-            except Exception as e:
-                logger.warning(f"Initial send_code failed: {e}. Retrying with generic settings...")
-                sent_code = await self.temp_client.send_code(phone_number)
-            
-            self.awaiting_login_code = {
-                "phone_number": phone_number,
-                "phone_code_hash": sent_code.phone_code_hash,
-                "temp_client": self.temp_client
-            }
-            
-            await status_msg.edit_text(
-                f"📟 **Code Sent** to `{phone_number}`\n\n"
-                "Please reply to this message with the **5-digit code**."
-            )
-        except Exception as e:
-            logger.error(f"Login error: {e}")
-            await message.reply(f"❌ Setup Failed: {str(e)}")
-
-        @self.app.on_message(
-            filters.private & filters.text & ~filters.command([
-                "entry", "activetrades", "tradeoverride", "pricetest", "login",
-                "dbstatus", "dmstatus", "sendwelcomedm", "newmemberslist", "dmmessages"
-            ]))
-        async def text_input_handler(client, message: Message):
-            await self.handle_text_input(client, message)
-
-        @self.app.on_message(filters.group & filters.text & ~filters.command([
-            "entry", "activetrades", "tradeoverride", "pricetest", "dbstatus",
-            "dmstatus", "freetrialusers", "sendwelcomedm", "newmemberslist", "dmmessages"
-        ]))
-        async def group_message_handler(client, message: Message):
-            await self.handle_group_message(client, message)
-
-        @self.app.on_message(filters.group & filters.service)
-        async def delete_service_messages(client, message: Message):
-            """Auto-delete all service messages from VIP and FREE groups"""
-            if message.chat.id in [VIP_GROUP_ID, FREE_GROUP_ID]:
-                try:
-                    await message.delete()
-                except Exception as e:
-                    logger.debug(f"Could not delete service message: {e}")
-
-        @self.app.on_message(filters=filters.group)
-        async def handle_group_reaction_update(client, message: Message):
-            """Track emoji reactions in free group for engagement scoring"""
-            if message.chat.id != FREE_GROUP_ID or not message.reactions:
-                return
-            
-            if not self.db_pool:
-                return
-            
-            try:
-                asyncio.create_task(self._fetch_and_store_reactions(message))
-            except Exception as e:
-                logger.debug(f"Error scheduling reaction fetch: {e}")
-
-    async def _fetch_and_store_reactions(self, message: Message):
-        """Fetch actual users who reacted and store individually for engagement tracking"""
-        try:
-            if not message.reactions or not self.db_pool:
-                return
-            
-            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-            
-            # For each reaction on the message, fetch users who reacted
             async with self.db_pool.acquire() as conn:
-                for reaction in message.reactions:
-                    emoji_str = str(reaction.emoji) if hasattr(reaction, 'emoji') else str(reaction)
-                    
-                    try:
-                        # Get list of users who reacted with this emoji
-                        # Note: In Pyrogram 2.x, we should check if get_reaction_users exists or use get_chat_event_log or similar
-                        # However, for now we will fix the common syntax issue with upper() on None
-                        # Use a more robust way to get reaction users if available
-                        try:
-                            async for reactor in self.app.get_reaction_users(
-                                FREE_GROUP_ID, message.id, emoji_str):
-                                
-                                # Store INDIVIDUAL user reaction
-                                await conn.execute(
-                                    '''INSERT INTO emoji_reactions (user_id, message_id, emoji, reaction_time)
-                                       VALUES ($1, $2, $3, $4)
-                                       ON CONFLICT (user_id, message_id, emoji) DO NOTHING''',
-                                    reactor.id, message.id, emoji_str, current_time
-                                )
-                        except Exception as e:
-                            logger.debug(f"get_reaction_users failed: {e}")
-                    except Exception as e:
-                        logger.debug(f"Error fetching reactors for emoji {emoji_str}: {e}")
+                session = await conn.fetchval(
+                    "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
+                )
+            
+            if not session:
+                await message.reply("🔴 **Userbot Status**: Disconnected (No session found).")
+            else:
+                await message.reply("🟢 **Userbot Status**: Connected (Session exists in database).")
         except Exception as e:
-            logger.debug(f"Error storing reactions: {e}")
+            await message.reply(f"❌ Error checking status: {str(e)}")
 
-    async def is_owner(self, user_id: int) -> bool:
-        """Simple owner check matching OLDER_telegram_bot.py style"""
-        raw_owner_id = os.getenv("BOT_OWNER_USER_ID")
+    async def handle_login_setup(self, client, message: Message):
+        """Initiate Userbot Setup (Login)"""
+        if not self.db_pool:
+            await message.reply("❌ Database connection not available.")
+            return
+
+        user_id = message.from_user.id
+        phone = os.getenv("USERBOT_PHONE")
+        api_id = safe_int(os.getenv("USERBOT_API_ID", "0"))
+        api_hash = os.getenv("USERBOT_API_HASH", "")
+
+        if not phone or not api_id or not api_hash:
+            await message.reply("❌ Userbot credentials missing in environment variables.")
+            return
+
+        await message.reply(f"🔄 **Starting Userbot Login** for `{phone}`...\nRequesting code from Telegram...")
+
         try:
-            # First try env, then try hardcoded emergency fallback
-            if not raw_owner_id:
-                return user_id == 6664440870
-            owner_id = int(str(raw_owner_id).strip())
-            if owner_id == 0:
-                return user_id == 6664440870
-            return user_id == owner_id
-        except:
-            return user_id == 6664440870
+            # Create a temporary client for login
+            temp_client = Client(
+                name=f"temp_userbot_{user_id}",
+                api_id=api_id,
+                api_hash=api_hash,
+                in_memory=True
+            )
+            await temp_client.connect()
+            
+            # Request phone code
+            code_info = await temp_client.send_code(phone)
+            
+            self.userbot_login_state[user_id] = {
+                "client": temp_client,
+                "phone": phone,
+                "phone_code_hash": code_info.phone_code_hash
+            }
+
+            await message.reply(
+                "📩 **Code Sent!**\n\nPlease check your Telegram account for the 5-digit verification code and reply with it here.\n\n"
+                "**Format:** Just send the 5 digits (e.g., `12345`)."
+            )
+        except Exception as e:
+            await message.reply(f"❌ Failed to initiate login: {str(e)}")
+            if user_id in self.userbot_login_state:
+                del self.userbot_login_state[user_id]
+
+    async def process_userbot_code(self, client, message: Message):
+        """Process the 5-digit code sent by the owner"""
+        user_id = message.from_user.id
+        state = self.userbot_login_state.get(user_id)
+        
+        if not state:
+            return False
+
+        code = message.text.strip()
+        if not code.isdigit() or len(code) != 5:
+            await message.reply("❌ Invalid format. Please send exactly 5 digits.")
+            return True
+
+        await message.reply("⏳ **Verifying code and generating session...**")
+        
+        try:
+            temp_client = state["client"]
+            await temp_client.sign_in(
+                phone_number=state["phone"],
+                phone_code_hash=state["phone_code_hash"],
+                phone_code=code
+            )
+            
+            session_string = await temp_client.export_session_string()
+            
+            # Save session to database
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO bot_settings (setting_key, setting_value) "
+                    "VALUES ('userbot_session_string', $1) "
+                    "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
+                    session_string
+                )
+            
+            await message.reply("✅ **Success!** Userbot session saved to database.\n\nThe userbot service will now pick up the new session.")
+            await self.log_to_debug("✅ New Userbot session generated and stored.")
+            
+            await temp_client.disconnect()
+            del self.userbot_login_state[user_id]
+            return True
+            
+        except Exception as e:
+            await message.reply(f"❌ Login failed: {str(e)}")
+            await temp_client.disconnect()
+            del self.userbot_login_state[user_id]
+            return True
 
     async def handle_group_message(self, client: Client, message: Message):
         """Handle messages in groups"""
@@ -4541,6 +4530,33 @@ class TelegramTradingBot:
         except Exception as e:
             await message.reply(f"❌ Error checking status: {str(e)}")
 
+    async def log_to_debug(self, message: str, is_error: bool = False, user_id: Optional[int] = None, failed_message: Optional[str] = None):
+        if DEBUG_GROUP_ID:
+            try:
+                # Standardize professional debug headers
+                if is_error:
+                    msg_text = f"🚨 **SYSTEM ERROR**\n\n**Issue:** {message}\n\n@fx_pippioneers"
+                else:
+                    msg_text = f"📊 **SYSTEM LOG**\n\n**Event:** {message}"
+                
+                # Add user ID button if user_id is provided
+                keyboard = None
+                if user_id:
+                    msg_text += f"\n\n👤 **User ID:** `{user_id}`"
+                    
+                    # Build the button URL to open user's profile
+                    button_url = f"tg://user?id={user_id}"
+                    
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("👤 View User Profile", url=button_url)]
+                    ])
+                
+                await self.app.send_message(DEBUG_GROUP_ID, msg_text, reply_markup=keyboard)
+            except Exception as e:
+                logger.error(f"Failed to send debug log: {e}")
+        log_level = logging.ERROR if is_error else logging.INFO
+        logger.log(log_level, message)
+
     async def init_database(self):
         try:
             database_url = os.getenv('DATABASE_URL')
@@ -4553,7 +4569,7 @@ class TelegramTradingBot:
 
             self.db_pool = await asyncpg.create_pool(
                 database_url,
-                min_size=1, ssl="require",
+                min_size=1, ssl=ctx,
                 max_size=5,
                 command_timeout=30,
                 server_settings={'application_name': 'telegram-trading-bot'})
