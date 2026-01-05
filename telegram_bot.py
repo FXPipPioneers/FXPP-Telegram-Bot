@@ -586,9 +586,9 @@ class TelegramTradingBot:
                 await callback_query.answer()
                 await self.handle_login_setup(client, callback_query.message)
 
-        @self.app.on_message(filters.text & filters.private)
+        @self.app.on_message(filters.private)
         async def handle_private_message(client, message: Message):
-            if not await self.is_owner(message.from_user.id):
+            if not message.from_user or not await self.is_owner(message.from_user.id):
                 return
             
             # Check if we're waiting for a login code
@@ -4609,6 +4609,11 @@ class TelegramTradingBot:
                     "No database URL found - continuing without persistent memory"
                 )
                 return
+
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
 
             self.db_pool = await asyncpg.create_pool(
                 database_url,
