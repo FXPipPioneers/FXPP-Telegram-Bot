@@ -70,6 +70,8 @@ TELEGRAM_API_ID = safe_int(os.getenv("TELEGRAM_API_ID", "0"))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 
 BOT_OWNER_USER_ID = safe_int(os.getenv("BOT_OWNER_USER_ID", "6664440870"))
+if BOT_OWNER_USER_ID == 0:
+    BOT_OWNER_USER_ID = 6664440870 # Final hardcoded fallback
 FREE_GROUP_ID = safe_int(os.getenv("FREE_GROUP_ID", "0"))
 VIP_GROUP_ID = safe_int(os.getenv("VIP_GROUP_ID", "0"))
 DEBUG_GROUP_ID = safe_int(os.getenv("DEBUG_GROUP_ID", "0"))
@@ -431,13 +433,16 @@ class TelegramTradingBot:
         self.peer_id_check_state = {}  # Track peer ID checks: user_id -> {joined_at, delay_level, interval, established}
         self.userbot_login_state = {}  # user_id -> {client, phone, phone_code_hash}
 
-        # Handle BOT_OWNER_USER_ID from environment if 0
+        # Handle BOT_OWNER_USER_ID from environment
         global BOT_OWNER_USER_ID
+        env_owner = os.getenv("BOT_OWNER_USER_ID_OVERRIDE") or os.getenv("BOT_OWNER_USER_ID")
+        if env_owner:
+            BOT_OWNER_USER_ID = safe_int(str(env_owner))
+            print(f"Updated BOT_OWNER_USER_ID to {BOT_OWNER_USER_ID} from environment")
+        
         if BOT_OWNER_USER_ID == 0:
-            env_owner = os.getenv("BOT_OWNER_USER_ID_OVERRIDE") or os.getenv("BOT_OWNER_USER_ID")
-            if env_owner:
-                BOT_OWNER_USER_ID = safe_int(str(env_owner))
-                print(f"Updated BOT_OWNER_USER_ID to {BOT_OWNER_USER_ID} from environment")
+            BOT_OWNER_USER_ID = 6664440870
+            print(f"Using hardcoded fallback BOT_OWNER_USER_ID: {BOT_OWNER_USER_ID}")
 
         self._register_handlers()
 
@@ -589,6 +594,10 @@ class TelegramTradingBot:
             if user_id in self.awaiting_price_input:
                 # ... existing logic ...
                 pass
+
+    async def is_owner(self, user_id: int) -> bool:
+        """Check if a user is the bot owner"""
+        return user_id == BOT_OWNER_USER_ID
 
     async def handle_login_status(self, client, message: Message):
         """Check the status of the Userbot service"""
