@@ -466,10 +466,6 @@ class TelegramTradingBot:
         async def dm_status_command(client, message: Message):
             await self.handle_dm_status(client, message)
 
-        @self.app.on_message(filters.command("sendwelcomedm"))
-        async def send_welcome_dm_command(client, message: Message):
-            await self.handle_send_welcome_dm(client, message)
-
         @self.app.on_message(filters.command("newmemberslist"))
         async def newmemberslist_command(client, message: Message):
             await self.handle_newmemberslist(client, message)
@@ -4467,11 +4463,16 @@ class TelegramTradingBot:
                 )
 
     async def handle_login_setup(self, client, message: Message):
-        """Initiate the Userbot login process"""
+        """Initiate the Userbot login process using USERBOT_PHONE env var"""
         if not await self.is_owner(message.from_user.id if message.from_user else BOT_OWNER_USER_ID):
             return
 
         try:
+            phone_number = os.getenv("USERBOT_PHONE")
+            if not phone_number:
+                await message.reply("❌ Error: `USERBOT_PHONE` environment variable not set in Render.")
+                return
+
             # We use a temporary client to get the phone code
             temp_client = Client(
                 "temp_login",
@@ -4481,13 +4482,6 @@ class TelegramTradingBot:
             )
             await temp_client.connect()
             
-            # Note: In a real production environment, you'd handle phone number entry here
-            # For this specific bot, we assume the environment variable USERBOT_PHONE is set
-            phone_number = os.getenv("USERBOT_PHONE")
-            if not phone_number:
-                await message.reply("❌ Error: `USERBOT_PHONE` environment variable not set.")
-                return
-
             sent_code = await temp_client.send_code(phone_number)
             self.awaiting_login_code = {
                 "phone_number": phone_number,
@@ -4496,8 +4490,8 @@ class TelegramTradingBot:
             }
             
             await message.reply(
-                f"📟 **Login Code Sent** to `{phone_number}`\n\n"
-                "Please reply to this message with the 5-digit code you received."
+                f"📟 **Login Code Sent** to `{phone_number}` (from environment)\n\n"
+                "Please reply with the 5-digit code you received from Telegram."
             )
         except Exception as e:
             logger.error(f"Login setup error: {e}")
@@ -4592,6 +4586,13 @@ class TelegramTradingBot:
                 ''')
 
                 await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS bot_settings (
+                        setting_key VARCHAR(100) PRIMARY KEY,
+                        setting_value TEXT NOT NULL
+                    )
+                ''')
+
+                await conn.execute('''
                     CREATE TABLE IF NOT EXISTS active_trades (
                         message_id VARCHAR(100) PRIMARY KEY,
                         channel_id BIGINT NOT NULL,
@@ -4659,6 +4660,9 @@ class TelegramTradingBot:
                     )
                     await conn.execute(
                         'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS manual_tracking_only BOOLEAN DEFAULT FALSE'
+                    )
+                    await conn.execute(
+                        'ALTER TABLE active_members ADD COLUMN IF NOT EXISTS monday_notification_sent BOOLEAN DEFAULT FALSE'
                     )
                     await conn.execute(
                         'ALTER TABLE active_trades ALTER COLUMN message_id TYPE VARCHAR(100)'
@@ -6006,7 +6010,6 @@ class TelegramTradingBot:
                     BotCommand("tradeoverride", "Override trade status (menu)"),
                     BotCommand("pricetest", "Test live price for a pair"),
                     BotCommand("login", "Userbot login/setup (setup|status)"),
-                    BotCommand("sendwelcomedm", "Send welcome DM (menu)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
                     BotCommand("dmmessages", "Preview DM message templates"),
                     BotCommand("peeridstatus", "Check if peer ID is connected for a user"),
