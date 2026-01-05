@@ -586,20 +586,73 @@ class TelegramTradingBot:
                 await callback_query.answer()
                 await self.handle_login_setup(client, callback_query.message)
 
-        @self.app.on_message(filters.private)
+        @self.app.on_message(filters.private, group=-1)
         async def handle_private_message(client, message: Message):
-            if not message.from_user or not await self.is_owner(message.from_user.id):
+            if not message.from_user:
+                return
+            
+            # Explicitly check owner ID
+            user_id = message.from_user.id
+            if user_id != BOT_OWNER_USER_ID:
                 return
             
             # Check if we're waiting for a login code
             if await self.process_userbot_code(client, message):
+                # Stop propagation if handled
+                message.stop_propagation()
                 return
 
-            # Handle price inputs for manual signals
             user_id = message.from_user.id
+            # Handle pair input for /entry
+            if user_id in self.awaiting_custom_pair:
+                pair = message.text.upper().strip()
+                awaiting_data = self.awaiting_custom_pair.pop(user_id)
+
+                if isinstance(awaiting_data, dict) and awaiting_data.get('type') == 'pricetest':
+                    await message.reply(f"Fetching live price for **{pair}**...")
+                    price = await self.get_live_price(pair)
+                    if price:
+                        pair_name = PAIR_CONFIG.get(pair, {}).get('name', pair)
+                        decimals = PAIR_CONFIG.get(pair, {}).get('decimals', 5)
+                        await message.reply(f"**Price Test: {pair_name}**\n\nLive Price: **{price:.{decimals}f}**")
+                    else:
+                        await message.reply(f"Could not retrieve price for **{pair}**. The pair may not be supported or APIs are unavailable.")
+                    return
+
+                if user_id in PENDING_ENTRIES:
+                    entry_data = PENDING_ENTRIES[user_id]
+                    entry_data['pair'] = pair
+                    self.awaiting_price_input[user_id] = True
+                    await message.reply(f"Pair set to **{pair}**.\n\nStep 4: Type the entry price (the price on your chart right now):")
+                    return
+
+            # Handle price inputs for manual signals
             if user_id in self.awaiting_price_input:
-                # ... existing logic ...
-                pass
+                try:
+                    price = float(message.text.strip())
+                    if user_id in PENDING_ENTRIES:
+                        entry_data = PENDING_ENTRIES[user_id]
+                        entry_data['price'] = price
+                        self.awaiting_price_input.pop(user_id, None)
+
+                        keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("VIP Group Only", callback_data="entry_group_vip")],
+                            [InlineKeyboardButton("Free Group Only", callback_data="entry_group_free")],
+                            [InlineKeyboardButton("Both Groups", callback_data="entry_group_both")],
+                            [InlineKeyboardButton("Manual Signal (untracked)", callback_data="entry_group_manual")],
+                            [InlineKeyboardButton("Cancel", callback_data="entry_cancel")]
+                        ])
+                        await message.reply(
+                            f"**Create Trading Signal**\n\n"
+                            f"Action: **{entry_data['action']}**\n"
+                            f"Type: **{entry_data['entry_type'].upper()}**\n"
+                            f"Pair: **{entry_data['pair']}**\n"
+                            f"Price: **{price}**\n\n"
+                            f"Step 4: Select where to send:",
+                            reply_markup=keyboard)
+                except ValueError:
+                    await message.reply("Invalid price. Please enter a valid number (e.g., 2650.50):")
+                return
 
     async def is_owner(self, user_id: int) -> bool:
         """Check if a user is the bot owner"""
