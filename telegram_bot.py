@@ -596,21 +596,15 @@ class TelegramTradingBot:
             if user_id != BOT_OWNER_USER_ID:
                 return
             
-            # LOG FOR DEBUGGING
-            logger.info(f"Private message received from owner {user_id}: {message.text}")
-            await self.log_to_debug(f"DEBUG: Private message from owner: {message.text[:50]}")
-            
             # Check if we're waiting for a login code
             if await self.process_userbot_code(client, message):
                 logger.info(f"Login code processed for {user_id}")
-                await self.log_to_debug(f"DEBUG: Login code processed for {user_id}")
                 # Stop propagation if handled
                 message.stop_propagation()
                 return
 
             # Handle pair input for /entry
             if user_id in self.awaiting_custom_pair:
-                logger.info(f"Custom pair input received from {user_id}: {message.text}")
                 pair = message.text.upper().strip()
                 awaiting_data = self.awaiting_custom_pair.pop(user_id)
 
