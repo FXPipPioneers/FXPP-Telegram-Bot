@@ -729,9 +729,9 @@ class TelegramTradingBot:
                 api_id=api_id,
                 api_hash=api_hash,
                 in_memory=True,
-                device_model="Samsung SM-G998B",
-                system_version="Android 12",
-                app_version="8.4.1",
+                device_model="PC 64bit",
+                system_version="Linux 6.8.0-1043-aws",
+                app_version="2.1.0",
                 lang_code="en"
             )
             
