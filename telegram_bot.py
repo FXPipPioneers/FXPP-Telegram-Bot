@@ -568,10 +568,56 @@ class TelegramTradingBot:
 
             action = callback_query.data.split("_")[1]
             if action == "setup":
+                await callback_query.answer("Initiating Setup...")
+                # Call handle_login_setup directly which now uses initiate_login_flow
                 await self.handle_login_setup(client, callback_query.message)
             elif action == "status":
+                await callback_query.answer()
                 await self.handle_login_status(client, callback_query.message)
-            await callback_query.answer()
+
+    async def initiate_login_flow(self, message: Message):
+        """Dedicated login initiation logic that works for both commands and buttons"""
+        try:
+            phone_number = os.getenv("USERBOT_PHONE")
+            if not phone_number:
+                await message.reply("❌ Error: `USERBOT_PHONE` environment variable not set in Render.")
+                return
+
+            # Show progress on the widget or send new message
+            status_msg = await message.reply(f"⏳ **Connecting to Telegram...**\nAttempting login for `{phone_number}`")
+
+            temp_client = Client(
+                "temp_login",
+                api_id=TELEGRAM_API_ID,
+                api_hash=TELEGRAM_API_HASH,
+                in_memory=True
+            )
+            
+            # This is the critical fix - ensure the temp_client is properly initialized and connected
+            await temp_client.connect()
+            
+            try:
+                sent_code = await temp_client.send_code(phone_number)
+                self.awaiting_login_code = {
+                    "phone_number": phone_number,
+                    "phone_code_hash": sent_code.phone_code_hash,
+                    "temp_client": temp_client
+                }
+                
+                await status_msg.edit_text(
+                    f"📟 **Login Code Sent** to `{phone_number}`\n\n"
+                    "Please reply to this message with the **5-digit code** you received from Telegram."
+                )
+            except Exception as e:
+                await temp_client.disconnect()
+                raise e
+        except Exception as e:
+            logger.error(f"Login setup error: {e}")
+            # Try to send a clear message back to the user
+            try:
+                await message.reply(f"❌ **Login Setup Failed**: {str(e)}")
+            except:
+                pass
 
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
@@ -4463,39 +4509,14 @@ class TelegramTradingBot:
                 )
 
     async def handle_login_setup(self, client, message: Message):
-        """Initiate the Userbot login process using USERBOT_PHONE env var"""
-        if not await self.is_owner(message.from_user.id if message.from_user else BOT_OWNER_USER_ID):
+        """Initiate the Userbot login process via command"""
+        user_id = message.from_user.id if message.from_user else BOT_OWNER_USER_ID
+        if not await self.is_owner(user_id):
             return
-
-        try:
-            phone_number = os.getenv("USERBOT_PHONE")
-            if not phone_number:
-                await message.reply("❌ Error: `USERBOT_PHONE` environment variable not set in Render.")
-                return
-
-            # We use a temporary client to get the phone code
-            temp_client = Client(
-                "temp_login",
-                api_id=TELEGRAM_API_ID,
-                api_hash=TELEGRAM_API_HASH,
-                in_memory=True
-            )
-            await temp_client.connect()
-            
-            sent_code = await temp_client.send_code(phone_number)
-            self.awaiting_login_code = {
-                "phone_number": phone_number,
-                "phone_code_hash": sent_code.phone_code_hash,
-                "temp_client": temp_client
-            }
-            
-            await message.reply(
-                f"📟 **Login Code Sent** to `{phone_number}` (from environment)\n\n"
-                "Please reply with the 5-digit code you received from Telegram."
-            )
-        except Exception as e:
-            logger.error(f"Login setup error: {e}")
-            await message.reply(f"❌ **Login Setup Failed**: {str(e)}")
+        
+        # Ensure we're using the correct message object for replies
+        # If it's a callback query message, it's already set
+        await self.initiate_login_flow(message)
 
     async def handle_login_status(self, client, message: Message):
         """Check the status of the Userbot service"""
