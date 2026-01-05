@@ -576,52 +576,45 @@ class TelegramTradingBot:
                 await self.handle_login_status(client, callback_query.message)
 
     async def initiate_login_flow(self, message: Message):
-        """Initiate the Userbot login process using logic from OLDER_telegram_bot.py"""
-        if not await self.is_owner(message.from_user.id if message.from_user else BOT_OWNER_USER_ID):
+        """Initiate login using exact logic from OLDER_telegram_bot.py"""
+        # Ensure we check the correct user
+        user_id = message.from_user.id if message.from_user else 0
+        if not await self.is_owner(user_id):
+            logger.warning(f"Unauthorized login attempt from {user_id}")
             return
 
-        phone_number = os.getenv("USERBOT_PHONE", "").strip().replace(" ", "").replace("-", "")
+        phone_number = os.getenv("USERBOT_PHONE", "").strip()
         if not phone_number:
-            await message.reply("❌ Error: `USERBOT_PHONE` environment variable not set.")
-            return
-
-        if not TELEGRAM_API_ID or not TELEGRAM_API_HASH:
-            await message.reply("❌ Error: `TELEGRAM_API_ID` or `TELEGRAM_API_HASH` not set.")
+            await message.reply("❌ Error: `USERBOT_PHONE` not set in settings.")
             return
 
         try:
-            status_msg = await message.reply(f"⏳ **Connecting to Telegram...**\nInitiating login for `{phone_number}`")
+            status_msg = await message.reply(f"⏳ **Connecting...**\nPhone: `{phone_number}`")
             
-            # Using the Client configuration from OLDER_telegram_bot.py
-            # but adapted to the current variable names
-            temp_client = Client(
+            # Simple client initialization that worked before
+            self.temp_client = Client(
                 "temp_login",
                 api_id=TELEGRAM_API_ID,
                 api_hash=TELEGRAM_API_HASH,
-                phone_number=phone_number,
                 in_memory=True
             )
             
-            await temp_client.connect()
+            await self.temp_client.connect()
+            sent_code = await self.temp_client.send_code(phone_number)
             
-            try:
-                sent_code = await temp_client.send_code(phone_number)
-                self.awaiting_login_code = {
-                    "phone_number": phone_number,
-                    "phone_code_hash": sent_code.phone_code_hash,
-                    "temp_client": temp_client
-                }
-                
-                await status_msg.edit_text(
-                    f"📟 **Login Code Sent** to `{phone_number}`\n\n"
-                    "Please reply with the 5-digit code you received from Telegram."
-                )
-            except Exception as e:
-                await temp_client.disconnect()
-                raise e
+            self.awaiting_login_code = {
+                "phone_number": phone_number,
+                "phone_code_hash": sent_code.phone_code_hash,
+                "temp_client": self.temp_client
+            }
+            
+            await status_msg.edit_text(
+                f"📟 **Code Sent** to `{phone_number}`\n\n"
+                "Please reply to this message with the **5-digit code**."
+            )
         except Exception as e:
-            logger.error(f"Login setup error: {e}")
-            await message.reply(f"❌ **Login Setup Failed**: {str(e)}")
+            logger.error(f"Login error: {e}")
+            await message.reply(f"❌ Setup Failed: {str(e)}")
 
         @self.app.on_message(
             filters.private & filters.text & ~filters.command([
@@ -698,24 +691,18 @@ class TelegramTradingBot:
             logger.debug(f"Error storing reactions: {e}")
 
     async def is_owner(self, user_id: int) -> bool:
-        """Check if user is the bot owner with robust parsing"""
+        """Simple owner check matching OLDER_telegram_bot.py style"""
+        raw_owner_id = os.getenv("BOT_OWNER_USER_ID")
         try:
-            raw_owner_id = os.getenv("BOT_OWNER_USER_ID", "0")
-            if not raw_owner_id or not raw_owner_id.strip():
-                # If it's an empty string or just whitespace, owner check fails
-                # unless BOT_OWNER_USER_ID is explicitly 0
-                return False
-            owner_id = int(raw_owner_id.strip())
+            # First try env, then try hardcoded emergency fallback
+            if not raw_owner_id:
+                return user_id == 6664440870
+            owner_id = int(str(raw_owner_id).strip())
             if owner_id == 0:
-                return False
-            
-            is_owner = user_id == owner_id
-            if not is_owner:
-                logger.debug(f"Owner check failed: user {user_id} != owner {owner_id}")
-            return is_owner
-        except (ValueError, TypeError):
-            logger.error(f"Error parsing BOT_OWNER_USER_ID: {os.getenv('BOT_OWNER_USER_ID')}")
-            return False
+                return user_id == 6664440870
+            return user_id == owner_id
+        except:
+            return user_id == 6664440870
 
     async def handle_group_message(self, client: Client, message: Message):
         """Handle messages in groups"""
