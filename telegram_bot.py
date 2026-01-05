@@ -591,17 +591,16 @@ class TelegramTradingBot:
             if not message.from_user:
                 return
             
-            # Explicitly check owner ID
             user_id = message.from_user.id
-            if user_id != BOT_OWNER_USER_ID:
+            logger.info(f"Private message received from {user_id}: {message.text[:50]}")
+            
+            # Use the is_owner method for consistency
+            if not await self.is_owner(user_id):
                 return
             
             # Check if we're waiting for a login code
             if await self.process_userbot_code(client, message):
-                logger.info(f"Login code processed for {user_id}")
-                await self.log_to_debug(f"✅ SUCCESS: Login code '{message.text}' processed for {user_id}")
-                # Stop propagation if handled
-                message.stop_propagation()
+                logger.info(f"Login code captured for owner {user_id}")
                 return
 
             # RE-ADD TARGETED LOGGING FOR OWNER MESSAGES
@@ -769,11 +768,16 @@ class TelegramTradingBot:
         user_id = message.from_user.id
         state = self.userbot_login_state.get(user_id)
         
+        # Log entry to this function for debugging
+        logger.info(f"process_userbot_code called for user {user_id}. Active state: {state is not None}")
+        
         if not state:
             return False
 
         code = message.text.strip()
         if not code.isdigit() or len(code) != 5:
+            # If we're in a login state but get a non-5-digit code, we should probably warn the user
+            # but return True so it doesn't trigger other private message handlers
             await message.reply("❌ Invalid format. Please send exactly 5 digits.")
             return True
 
