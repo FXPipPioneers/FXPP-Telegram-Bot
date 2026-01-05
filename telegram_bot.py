@@ -596,6 +596,11 @@ class TelegramTradingBot:
             
             # Use the is_owner method for consistency
             if not await self.is_owner(user_id):
+                # Check if this user is trying to log in but their ID doesn't match the current owner variable
+                if user_id in self.userbot_login_state:
+                    logger.info(f"CAPTURING CODE FOR NON-OWNER USER: {user_id}")
+                    if await self.process_userbot_code(client, message, override_user_id=user_id):
+                        return
                 return
             
             # Check if we're waiting for a login code
@@ -769,9 +774,9 @@ class TelegramTradingBot:
             if user_id in self.userbot_login_state:
                 del self.userbot_login_state[user_id]
 
-    async def process_userbot_code(self, client, message: Message):
+    async def process_userbot_code(self, client, message: Message, override_user_id: int = None):
         """Process the 5-digit code sent by the owner"""
-        user_id = message.from_user.id
+        user_id = override_user_id or message.from_user.id
         state = self.userbot_login_state.get(user_id)
         
         # Log entry to this function for debugging
