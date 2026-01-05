@@ -718,14 +718,20 @@ class TelegramTradingBot:
 
             # Create a temporary client for login
             logger.info("Initializing temporary Pyrogram client with official device info")
+            # Clear any existing local session files for the temp client to ensure a fresh start
+            temp_session_path = f"temp_userbot_{user_id}.session"
+            if os.path.exists(temp_session_path):
+                try: os.remove(temp_session_path)
+                except: pass
+
             temp_client = Client(
                 name=f"temp_userbot_{user_id}",
                 api_id=api_id,
                 api_hash=api_hash,
                 in_memory=True,
-                device_model="fxppbott",
-                system_version="Linux 6.8.0-1043-aws",
-                app_version="2.0.106",
+                device_model="Samsung SM-G998B",
+                system_version="Android 12",
+                app_version="8.4.1",
                 lang_code="en"
             )
             
@@ -788,6 +794,12 @@ class TelegramTradingBot:
             temp_client = state["client"]
             logger.info(f"Attempting sign_in for phone {state['phone']} with hash {state['phone_code_hash']}")
             
+            # Add human-like delay and explicit connection check to avoid handshake timing issues
+            await asyncio.sleep(3)
+            if not temp_client.is_connected:
+                logger.info("Reconnecting temp_client before sign_in...")
+                await temp_client.connect()
+
             await temp_client.sign_in(
                 phone_number=state["phone"],
                 phone_code_hash=state["phone_code_hash"],
@@ -828,7 +840,7 @@ class TelegramTradingBot:
             elif "PHONE_CODE_EXPIRED" in error_msg:
                 await self.log_to_debug("💡 TIP: The code has expired. Please run /login setup again to get a new code.")
             elif "SESSION_PASSWORD_NEEDED" in error_msg:
-                await self.log_to_debug("⚠️ ALERT: Two-Step Verification is enabled on this account. The current implementation does not handle 2FA passwords yet.")
+                await self.log_to_debug("⚠️ ALERT: Two-Step Verification is enabled on this account. Please turn it off temporarily.")
 
             try:
                 await temp_client.disconnect()

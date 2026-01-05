@@ -30,6 +30,10 @@ The bot is implemented as a high-performance, single-file asynchronous Python ap
 
 ## Development & Deployment Guidelines
 
+**CRITICAL NOTE**: This project is developed on Replit but **runs exclusively on Render.com**. 
+- **Environment Variables**: All secrets and configuration variables are managed in the Render dashboard. Replit does not have access to these production keys.
+- **Bot Execution**: The workflows configured in Replit are for development/debugging purposes only. The production bot instance is hosted on Render.
+
 ### Environment Variables (Managed on Render)
 - `TELEGRAM_BOT_TOKEN`: Core bot authentication.
 - `TELEGRAM_API_ID` / `TELEGRAM_API_HASH`: Telegram API credentials.
