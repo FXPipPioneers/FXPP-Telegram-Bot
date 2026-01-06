@@ -3882,13 +3882,15 @@ class TelegramTradingBot:
                     # Queue Welcome DM for Userbot - with 10 min delay handled by userbot_service
                     welcome_dm = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"].replace("{user_name}", user.first_name or "Trader")
                     await conn.execute(
-                        "INSERT INTO userbot_dm_queue (user_id, message, label, status, created_at) VALUES ($1, $2, 'Welcome DM', 'pending', $3)",
+                        "INSERT INTO userbot_dm_queue (user_id, message_text, label, status, created_at) VALUES ($1, $2, 'Welcome DM', 'pending', $3)",
                         user.id, welcome_dm, current_time
                     )
                 
                 await self.log_to_debug(f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Welcome DM queued for Userbot (10m delay)")
             except Exception as e:
-                logger.error(f"Error tracking free group join for {user.id}: {e}")
+                error_msg = f"❌ Error tracking free group join for {user.id}: {e}"
+                logger.error(error_msg)
+                await self.log_to_debug(error_msg)
 
     async def show_member_db_widget(self, message):
         async with self.db_pool.acquire() as conn:

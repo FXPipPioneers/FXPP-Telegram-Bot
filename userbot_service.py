@@ -99,7 +99,7 @@ class UserbotService:
                     CREATE TABLE IF NOT EXISTS userbot_dm_queue (
                         id SERIAL PRIMARY KEY,
                         user_id BIGINT NOT NULL,
-                        message TEXT NOT NULL,
+                        message_text TEXT NOT NULL,
                         label TEXT NOT NULL,
                         status TEXT DEFAULT 'pending',
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -303,7 +303,7 @@ class UserbotService:
 
                     # 6. Check for queued DMs from main bot
                     queued_dms = await conn.fetch("""
-                        SELECT id, user_id, message, label, created_at FROM userbot_dm_queue 
+                        SELECT id, user_id, message_text, label, created_at FROM userbot_dm_queue 
                         WHERE status = 'pending'
                         ORDER BY created_at ASC LIMIT 10
                     """)
@@ -317,14 +317,16 @@ class UserbotService:
                             if current_time < join_time + timedelta(minutes=10):
                                 continue # Wait until 10 mins have passed
 
-                        if await self.send_dm(row['user_id'], row['message'], row['label']):
+                        if await self.send_dm(row['user_id'], row['message_text'], row['label']):
                             await conn.execute("UPDATE userbot_dm_queue SET status = 'sent', sent_at = $1 WHERE id = $2", current_time, row['id'])
                         else:
                             await conn.execute("UPDATE userbot_dm_queue SET status = 'failed' WHERE id = $2", row['id'])
                 
                 await asyncio.sleep(60)
             except Exception as e:
-                logger.error(f"Error in DM loop: {e}")
+                error_msg = f"❌ Error in DM loop: {e}"
+                logger.error(error_msg)
+                await self.log_to_debug(error_msg)
                 await asyncio.sleep(30)
 
 if __name__ == "__main__":
