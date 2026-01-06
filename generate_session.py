@@ -1,5 +1,14 @@
 import asyncio
 import os
+import sys
+
+# Windows compatibility fix for Python 3.8+
+if sys.platform == 'win32':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
+
 from pyrogram import Client
 
 async def generate_session():
@@ -54,4 +63,10 @@ async def generate_session():
         await client.disconnect()
 
 if __name__ == "__main__":
-    asyncio.run(generate_session())
+    # Explicitly create and set the event loop for Python 3.12+ / 3.14
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(generate_session())
+    finally:
+        loop.close()
