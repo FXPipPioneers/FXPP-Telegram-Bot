@@ -497,6 +497,12 @@ class TelegramTradingBot:
         @self.app.on_chat_member_updated()
         async def handle_member_update(client,
                                        member_update: ChatMemberUpdated):
+            # Log all member updates to debug for visibility
+            if member_update.new_chat_member:
+                user = member_update.new_chat_member.user
+                chat = member_update.chat
+                status = member_update.new_chat_member.status
+                await self.log_to_debug(f"👤 Member Update: {user.first_name} ({user.id}) joined/updated in {chat.title} as {status}")
             await self.process_member_update(client, member_update)
 
         @self.app.on_callback_query(filters.regex("^entry_"))
@@ -543,6 +549,19 @@ class TelegramTradingBot:
         @self.app.on_callback_query(filters.regex("^at_"))
         async def active_trades_callback(client, callback_query: CallbackQuery):
             await self.handle_active_trades_callback(client, callback_query)
+
+        @self.app.on_message(filters.command("memberdatabase"))
+        async def memberdatabase_command(client, message: Message):
+            if not await self.is_owner(message.from_user.id):
+                return
+            await self.show_member_db_widget(message)
+
+        @self.app.on_callback_query(filters.regex("^mdb_"))
+        async def member_db_callback(client, callback_query: CallbackQuery):
+            if not await self.is_owner(callback_query.from_user.id):
+                await callback_query.answer("❌ Unauthorized", show_alert=True)
+                return
+            await self.handle_member_db_callback(client, callback_query)
 
         @self.app.on_message(filters.command("setsession"))
         async def setsession_command(client, message: Message):
@@ -3832,19 +3851,26 @@ class TelegramTradingBot:
             await self.handle_vip_group_join(client, user, invite_link)
 
     async def handle_free_group_join(self, client: Client, user):
-        # Track free group join for engagement tracking and peer ID verification
+        # Check if member tracking is enabled
+        tracking_enabled = True
+        if self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    val = await conn.fetchval("SELECT setting_value FROM bot_settings WHERE setting_key = 'member_tracking_enabled'")
+                    if val == 'false':
+                        tracking_enabled = False
+            except Exception as e:
+                logger.error(f"Error checking tracking status: {e}")
+
+        if not tracking_enabled:
+            await self.log_to_debug(f"ℹ️ Member tracking is DISABLED. Ignoring join from {user.first_name} (ID: {user.id})")
+            return
+
+        # Track free group join for engagement tracking
         if self.db_pool:
             try:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
-                # FIX 1: Forced Resolution - Immediately try to get member info to prime cache
-                try:
-                    await client.get_chat_member(FREE_GROUP_ID, user.id)
-                    # ALSO immediately attempt to establish a Peer ID globally
-                    await client.get_users([user.id])
-                except Exception as e:
-                    logger.debug(f"Forced resolution/global fetch failed for {user.id}: {e}")
-
                 async with self.db_pool.acquire() as conn:
                     # Track for engagement
                     await conn.execute(
@@ -3853,24 +3879,52 @@ class TelegramTradingBot:
                            ON CONFLICT (user_id) DO NOTHING''',
                         user.id, current_time)
                     
-                    # Track for peer ID verification (30 min delay, check every 3 min)
-                    next_check = current_time + timedelta(minutes=3)
-                    await conn.execute('''
-                        INSERT INTO peer_id_checks (user_id, joined_at, current_delay_minutes, current_interval_minutes, next_check_at)
-                        VALUES ($1, $2, 30, 3, $3)
-                        ON CONFLICT (user_id) DO NOTHING
-                    ''', user.id, current_time, next_check)
-                    
-                    # Queue Welcome DM for Userbot
+                    # Queue Welcome DM for Userbot - with 10 min delay handled by userbot_service
                     welcome_dm = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Welcome DM (New Free Group Member)"]["message"].replace("{user_name}", user.first_name or "Trader")
                     await conn.execute(
-                        "INSERT INTO userbot_dm_queue (user_id, message, label, status) VALUES ($1, $2, 'Welcome DM', 'pending')",
-                        user.id, welcome_dm
+                        "INSERT INTO userbot_dm_queue (user_id, message, label, status, created_at) VALUES ($1, $2, 'Welcome DM', 'pending', $3)",
+                        user.id, welcome_dm, current_time
                     )
                 
-                await self.log_to_debug(f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Peer ID verification and Welcome DM queued for Userbot")
+                await self.log_to_debug(f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Welcome DM queued for Userbot (10m delay)")
             except Exception as e:
                 logger.error(f"Error tracking free group join for {user.id}: {e}")
+
+    async def show_member_db_widget(self, message):
+        async with self.db_pool.acquire() as conn:
+            val = await conn.fetchval("SELECT setting_value FROM bot_settings WHERE setting_key = 'member_tracking_enabled'")
+            status = "🟢 ENABLED" if val != 'false' else "🔴 DISABLED"
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Turn ON Tracking", callback_data="mdb_on")],
+            [InlineKeyboardButton("❌ Turn OFF Tracking", callback_data="mdb_off")],
+            [InlineKeyboardButton("📊 Refresh Status", callback_data="mdb_status")]
+        ])
+        
+        text = f"🗄 **Member Database Control**\n\nThis widget controls whether the bot tracks new members for Welcome DMs.\n\n**Current Status:** {status}\n\n_Use 'Turn OFF' before starting a brand deal to prevent spamming hundreds of people._"
+        await message.reply(text, reply_markup=keyboard)
+
+    async def handle_member_db_callback(self, client, callback_query):
+        action = callback_query.data.replace("mdb_", "")
+        
+        if action == "status":
+            await callback_query.message.delete()
+            await self.show_member_db_widget(callback_query.message)
+            return
+
+        new_val = 'true' if action == 'on' else 'false'
+        async with self.db_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO bot_settings (setting_key, setting_value)
+                VALUES ('member_tracking_enabled', $1)
+                ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1
+            """, new_val)
+        
+        status_text = "ENABLED" if action == 'on' else "DISABLED"
+        await callback_query.answer(f"✅ Tracking is now {status_text}")
+        await callback_query.message.delete()
+        await self.show_member_db_widget(callback_query.message)
+        await self.log_to_debug(f"⚙️ **Admin Action**: Member tracking has been manually {status_text} by {callback_query.from_user.first_name}")
 
     async def handle_vip_group_join(self, client: Client, user, invite_link):
         """
@@ -6246,6 +6300,7 @@ class TelegramTradingBot:
                     BotCommand("entry", "Create trading signal (menu)"),
                     BotCommand("activetrades", "View active trading signals"),
                     BotCommand("tradeoverride", "Override trade status (menu)"),
+                    BotCommand("memberdatabase", "Toggle member tracking for deals"),
                     BotCommand("setsession", "Update Userbot session manually"),
                     BotCommand("pricetest", "Test live price for a pair"),
                     BotCommand("login", "Userbot login/setup (setup|status)"),

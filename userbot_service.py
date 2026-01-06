@@ -145,7 +145,6 @@ class UserbotService:
             api_id=TELEGRAM_API_ID,
             api_hash=TELEGRAM_API_HASH,
             session_string=session_string,
-            no_updates=False,
             device_model="PC 64bit",
             system_version="Linux 6.8.0-1043-aws",
             app_version="2.1.0",
@@ -167,10 +166,13 @@ class UserbotService:
         while self.running:
             try:
                 if self.client and self.client.is_connected:
-                    # Logic to refresh peers can be added here, 
-                    # like fetching members from groups.
-                    logger.info("Peer discovery heartbeat")
-                await asyncio.sleep(3600)
+                    logger.info("Peer discovery heartbeat - checking for new members")
+                    # Optionally fetch recent members from tracked groups
+                    for group_id in [FREE_GROUP_ID, VIP_GROUP_ID]:
+                        if group_id != 0:
+                            async for member in self.client.get_chat_members(group_id, limit=20):
+                                pass # This caches the peer in pyrogram's memory
+                await asyncio.sleep(600) # Check every 10 mins instead of 1 hour
             except Exception as e:
                 logger.error(f"Error in peer discovery: {e}")
                 await asyncio.sleep(60)
@@ -210,24 +212,13 @@ class UserbotService:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
                 async with self.db_pool.acquire() as conn:
-                    # 1. Check for pending Welcome DMs
-                    welcome_pending = await conn.fetch("""
-                        SELECT user_id FROM peer_id_checks 
-                        WHERE NOT welcome_dm_sent AND peer_id_established
-                    """)
-                    for row in welcome_pending:
-                        user_id = row['user_id']
-                        first_name = "Trader"
-                        try:
-                            user = await self.client.get_users(user_id)
-                            if user:
-                                first_name = getattr(user, 'first_name', "Trader")
-                        except Exception as e:
-                            logger.error(f"Error fetching user {user_id}: {e}")
-                            
-                        msg = f"**Hey {first_name}, Welcome to FX Pip Pioneers!**\n\n**Want to try our VIP Group for FREE?**\nWe're offering a **3-day free trial** of our VIP Group where you'll receive **6+ high-quality trade signals per day**.\n\n**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\nGood luck trading!"
-                        if await self.send_dm(user_id, msg, "Welcome DM"):
-                            await conn.execute("UPDATE peer_id_checks SET welcome_dm_sent = TRUE WHERE user_id = $1", user_id)
+                    # 1. Check for pending Welcome DMs - DEPRECATED (Now handled via userbot_dm_queue)
+                    # welcome_pending = await conn.fetch("""
+                    #     SELECT user_id FROM peer_id_checks 
+                    #     WHERE NOT welcome_dm_sent AND peer_id_established
+                    # """)
+                    # for row in welcome_pending:
+                    #     ... (Logic removed to centralize in queue)
 
                     # 2. Handle Trial Expiry Warnings (24h and 3h)
                     active_members = await conn.fetch("SELECT member_id, expiry_time FROM active_members")
@@ -312,11 +303,20 @@ class UserbotService:
 
                     # 6. Check for queued DMs from main bot
                     queued_dms = await conn.fetch("""
-                        SELECT id, user_id, message, label FROM userbot_dm_queue 
+                        SELECT id, user_id, message, label, created_at FROM userbot_dm_queue 
                         WHERE status = 'pending'
                         ORDER BY created_at ASC LIMIT 10
                     """)
                     for row in queued_dms:
+                        # 10 minute delay specifically for Welcome DMs
+                        if row['label'] == 'Welcome DM':
+                            join_time = row['created_at']
+                            if join_time.tzinfo is None:
+                                join_time = AMSTERDAM_TZ.localize(join_time)
+                            
+                            if current_time < join_time + timedelta(minutes=10):
+                                continue # Wait until 10 mins have passed
+
                         if await self.send_dm(row['user_id'], row['message'], row['label']):
                             await conn.execute("UPDATE userbot_dm_queue SET status = 'sent', sent_at = $1 WHERE id = $2", current_time, row['id'])
                         else:

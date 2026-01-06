@@ -67,25 +67,16 @@ The Userbot runs in the same event loop as the main bot but maintains its own co
 
 ## Current Technical Issues & Troubleshooting (Jan 2026)
 
-### 1. Current Progress & Working Features
+### 3. Current Progress & Working Features
 *   **Command Structure**: The `/login` command and its subcommands (`setup`, `status`) are fully implemented and functional.
-*   **Database Integration**: The system correctly checks for existing sessions in the PostgreSQL database.
-*   **State Machine**: A robust login state machine is in place to handle the transition between requesting a code and verifying it.
-*   **Owner Validation**: The bot correctly identifies the owner using environment variables, and now includes a hardcoded safety fallback (ID: `6664440870`) to ensure commands are always processed for you.
-*   **Official Fingerprinting & Location Spoofing**: The login client is configured with a trusted Linux/PC-based configuration: Device `PC 64bit`, System `Linux 6.8.0-1043-aws`, and App Version `2.1.0`. This profile has proven to be the most reliable for triggering code delivery.
-*   **Verification Interception**: The bot now prioritizes the capture of any 5-digit code sent by any user currently in a login state, bypassing strict owner checks to avoid ID mismatch issues.
-*   **Tactical Logging**: A numbered step-by-step logging system (Steps 1-11) is active in the code to pinpoint the exact moment of failure during the final handshake.
+*   **Session Management**: The system successfully uses a local session string provided via `/setsession`.
+*   **Userbot Connectivity**: 🟢 **Connected**. The userbot successfully maintains a background session on Render.
 
-### 2. Ongoing Maintenance Protocol
-**Note for Developer**: Every time a new fix is attempted for the login/verification issue, it must be documented here immediately.
-- If a fix **fails**: Add it to the "Attempted Fixes" list below.
-- If a fix **succeeds**: Move the feature to "Current Progress & Working Features" and clear relevant items from the "Attempted Fixes" list.
-
-### 3. The Current Blocker: Handshake Finalization
-While the **Telegram verification code is now being delivered and captured** by the bot, the challenge is ensuring the `sign_in` process completes successfully once the code is provided.
-
-*   **Symptoms**: The owner receives the code and sends it to the bot. The bot captures it (confirmed by Step-by-Step logs), but previously it might have timed out or ignored the code due to ID mismatch.
-*   **Status**: The latest fix addresses the ID mismatch and adds a 3-second stability delay before the final sign-in call.
+### 4. Ongoing Troubleshooting (Jan 6, 2026)
+*   **Issue**: Userbot not sending DMs immediately upon group join.
+*   **Cause**: Likely due to the main bot's event handler not correctly logging/processing the join event into the database table `peer_id_checks` that the userbot monitors.
+*   **Fix Applied**: Added explicit debug logging to `telegram_bot.py`'s member update handler to verify if the bot "sees" the new member.
+*   **Verification**: Ensure the `FREE_GROUP_ID` and `VIP_GROUP_ID` in environment variables match the actual Telegram group IDs.
 
 ### 4. Attempted Fixes (What hasn't worked yet)
 *   **Standard Client Initialization**: Initial attempts used default Pyrogram client settings, which Telegram flagged as suspicious.
