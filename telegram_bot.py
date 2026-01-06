@@ -3868,7 +3868,7 @@ class TelegramTradingBot:
                         user.id, welcome_dm
                     )
                 
-                await self.log_to_debug(f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Peer ID verification and Welcome DM queued")
+                await self.log_to_debug(f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Peer ID verification and Welcome DM queued for Userbot")
             except Exception as e:
                 logger.error(f"Error tracking free group join for {user.id}: {e}")
 

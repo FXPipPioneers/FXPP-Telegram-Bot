@@ -24,7 +24,11 @@ async def generate_session():
     # Attempt to suppress the speedup warning inside the import
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        from pyrogram import Client
+        os.environ["PYROGRAM_NO_VERSION_CHECK"] = "1"
+        try:
+            from pyrogram import Client
+        except ImportError:
+            from pyrogram import Client
     
     print("\nFX Pip Pioneers - Userbot Session Generator")
     print("------------------------------------------")
