@@ -6247,6 +6247,7 @@ class TelegramTradingBot:
                     BotCommand("entry", "Create trading signal (menu)"),
                     BotCommand("activetrades", "View active trading signals"),
                     BotCommand("tradeoverride", "Override trade status (menu)"),
+                    BotCommand("setsession", "Update Userbot session manually"),
                     BotCommand("pricetest", "Test live price for a pair"),
                     BotCommand("login", "Userbot login/setup (setup|status)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
