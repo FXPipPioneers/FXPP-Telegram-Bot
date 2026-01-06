@@ -2,6 +2,24 @@ from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 import os
 import asyncio
+import sys
+import warnings
+
+# Suppress deprecated warnings for Python 3.14+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# Windows compatibility fix
+if sys.platform == 'win32':
+    if sys.version_info < (3, 12):
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
+
+# Create the loop before importing pyrogram
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 from pyrogram import Client
 import asyncpg
 import ssl

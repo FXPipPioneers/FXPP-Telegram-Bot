@@ -633,7 +633,6 @@ class TelegramTradingBot:
                 return
 
             # RE-ADD TARGETED LOGGING FOR OWNER MESSAGES
-            await self.log_to_debug(f"📊 DEBUG: Message from owner: {message.text[:50]}")
 
             # Handle pair input for /entry
             if user_id in self.awaiting_custom_pair:

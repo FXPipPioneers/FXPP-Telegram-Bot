@@ -1,18 +1,32 @@
 import asyncio
 import os
 import sys
+import warnings
+
+# Suppress DeprecationWarnings and speedup warnings for cleaner output
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+os.environ["PYROGRAM_NO_VERSION_CHECK"] = "1"
 
 # Windows compatibility fix for Python 3.8+
 if sys.platform == 'win32':
-    try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except Exception:
-        pass
+    # Python 3.14+ handles this automatically, avoid explicit deprecated policy setting
+    if sys.version_info < (3, 12):
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
 
-from pyrogram import Client
+# CRITICAL: For Python 3.12-3.14, we must NOT import pyrogram at the top level
+# because its sync.py calls get_event_loop() immediately.
+# We will import it inside the async function after setting the loop.
 
 async def generate_session():
-    print("FX Pip Pioneers - Userbot Session Generator")
+    # Attempt to suppress the speedup warning inside the import
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from pyrogram import Client
+    
+    print("\nFX Pip Pioneers - Userbot Session Generator")
     print("------------------------------------------")
     
     api_id = input("Enter your API_ID: ")
