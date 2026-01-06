@@ -3872,6 +3872,16 @@ class TelegramTradingBot:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
                 async with self.db_pool.acquire() as conn:
+                    # Fix 1: Ensure column exists with correct name
+                    await conn.execute("""
+                        DO $$ 
+                        BEGIN 
+                            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='message') THEN
+                                ALTER TABLE userbot_dm_queue RENAME COLUMN message TO message_text;
+                            END IF;
+                        END $$;
+                    """)
+
                     # Track for engagement
                     await conn.execute(
                         '''INSERT INTO free_group_joins (user_id, joined_at, discount_sent)

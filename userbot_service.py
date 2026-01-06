@@ -125,6 +125,9 @@ class UserbotService:
             logger.error("Database pool not initialized. Cannot start service.")
             return
 
+        # Notify startup to debug group
+        await self.log_to_debug("🚀 **Userbot Service**: Initiating startup sequence...")
+
         while self.running:
             async with self.db_pool.acquire() as conn:
                 session_string = await conn.fetchval(
