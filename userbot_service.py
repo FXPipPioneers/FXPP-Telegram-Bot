@@ -150,7 +150,7 @@ class UserbotService:
             system_version="Linux 6.8.0-1043-aws",
             app_version="2.1.0",
             lang_code="en",
-            system_lang_code="en-US"
+            no_updates=False,
         )
         
         await self.client.start()

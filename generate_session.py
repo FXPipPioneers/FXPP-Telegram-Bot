@@ -42,7 +42,6 @@ async def generate_session():
         system_version="Linux 6.8.0-1043-aws",
         app_version="2.1.0",
         lang_code="en",
-        system_lang_code="en-US",
         in_memory=True,
         # Avoid tgcrypto requirement for local generation if it fails to build
         workers=1

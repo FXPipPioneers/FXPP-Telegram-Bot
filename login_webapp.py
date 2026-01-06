@@ -170,7 +170,7 @@ async def api_send_code():
             system_version="Linux 6.8.0-1043-aws",
             app_version="2.1.0",
             lang_code="en",
-            system_lang_code="en-US"
+            in_memory=True,
         )
         await client.connect()
         sent_code = await client.send_code(phone)
