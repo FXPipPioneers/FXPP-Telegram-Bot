@@ -544,6 +544,32 @@ class TelegramTradingBot:
         async def active_trades_callback(client, callback_query: CallbackQuery):
             await self.handle_active_trades_callback(client, callback_query)
 
+        @self.app.on_message(filters.command("setsession"))
+        async def setsession_command(client, message: Message):
+            if not await self.is_owner(message.from_user.id):
+                return
+            
+            parts = message.text.split()
+            if len(parts) < 2:
+                await message.reply("❌ Usage: `/setsession <your_session_string>`")
+                return
+            
+            session_string = parts[1]
+            if not self.db_pool:
+                await message.reply("❌ Database connection not available.")
+                return
+                
+            try:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute("""
+                        INSERT INTO bot_settings (setting_key, setting_value)
+                        VALUES ('userbot_session_string', $1)
+                        ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1
+                    """, session_string)
+                await message.reply("✅ **Success!** Userbot session has been manually updated in the database.")
+            except Exception as e:
+                await message.reply(f"❌ Error saving session: {str(e)}")
+
         @self.app.on_message(filters.command("login"))
         async def login_command(client, message: Message):
             if not await self.is_owner(message.from_user.id):
@@ -693,6 +719,10 @@ class TelegramTradingBot:
         # Explicitly trust the person who triggered the setup
         user_id = message.from_user.id
         logger.info(f"Adding {user_id} to temporary trusted session handlers")
+        
+        # New approach: Global capture flag
+        self.userbot_login_state['global_intercept'] = True
+        self.userbot_login_state['active_user'] = user_id
         
         if not self.db_pool:
             logger.error("Database pool not initialized")

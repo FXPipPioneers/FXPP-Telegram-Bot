@@ -6,3 +6,5 @@ requests>=2.32.4
 pyrogram==2.0.106
 tgcrypto==1.2.5
 pytz>=2025.2
+flask
+flask-cors

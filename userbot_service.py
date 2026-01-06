@@ -107,13 +107,19 @@ class UserbotService:
             logger.error("Database pool not initialized. Cannot start service.")
             return
 
-        async with self.db_pool.acquire() as conn:
-            session_string = await conn.fetchval(
-                "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
-            )
+        while self.running:
+            async with self.db_pool.acquire() as conn:
+                session_string = await conn.fetchval(
+                    "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
+                )
+            
+            if session_string:
+                break
+                
+            logger.info("Waiting for userbot session string in database...")
+            await asyncio.sleep(30)
         
-        if not session_string:
-            logger.error("No userbot session string found in database. Please login via main bot first.")
+        if not self.running:
             return
 
         self.client = Client(
@@ -124,7 +130,9 @@ class UserbotService:
             no_updates=False,
             device_model="PC 64bit",
             system_version="Linux 6.8.0-1043-aws",
-            app_version="2.1.0"
+            app_version="2.1.0",
+            lang_code="en",
+            system_lang_code="en-US"
         )
         
         await self.client.start()
