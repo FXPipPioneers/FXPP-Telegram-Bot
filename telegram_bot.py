@@ -3921,12 +3921,35 @@ class TelegramTradingBot:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
                 async with self.db_pool.acquire() as conn:
-                    # Fix 1: Ensure column exists with correct name
+                    # CREATE TABLE with correct schema if not exists
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS userbot_dm_queue (
+                            id SERIAL PRIMARY KEY,
+                            user_id BIGINT NOT NULL,
+                            message_text TEXT NOT NULL,
+                            label TEXT NOT NULL,
+                            status TEXT DEFAULT 'pending',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            sent_at TIMESTAMP WITH TIME ZONE
+                        );
+                    """)
+
+                    # Fix 1: Ensure column exists with correct name (for existing DBs)
                     await conn.execute("""
                         DO $$ 
                         BEGIN 
+                            -- 1. Rename 'message' to 'message_text'
                             IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='message') THEN
                                 ALTER TABLE userbot_dm_queue RENAME COLUMN message TO message_text;
+                            END IF;
+                            
+                            -- 2. Rename 'message_content' to 'message_text'
+                            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='message_content') THEN
+                                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='message_text') THEN
+                                    ALTER TABLE userbot_dm_queue RENAME COLUMN message_content TO message_text;
+                                ELSE
+                                    ALTER TABLE userbot_dm_queue ALTER COLUMN message_content DROP NOT NULL;
+                                END IF;
                             END IF;
                         END $$;
                     """)

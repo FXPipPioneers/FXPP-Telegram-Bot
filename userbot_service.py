@@ -120,8 +120,12 @@ class UserbotService:
                                 if content_exists > 0 and text_exists == 0:
                                     await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_content TO message_text")
                                     logger.info("✅ Renamed 'message_content' to 'message_text'")
+                                elif content_exists > 0 and text_exists > 0:
+                                    # Handle case where both exist (failed partial migration)
+                                    await conn.execute("ALTER TABLE userbot_dm_queue DROP COLUMN message_content")
+                                    logger.info("✅ Dropped redundant 'message_content'")
                             except Exception as e:
-                                logger.error(f"Error renaming message_content: {e}")
+                                logger.error(f"Error migrating message_content: {e}")
                             
                             # 3. Rename 'message_type' to 'label'
                             try:
@@ -136,8 +140,18 @@ class UserbotService:
                                 if type_exists > 0 and label_exists == 0:
                                     await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_type TO label")
                                     logger.info("✅ Renamed 'message_type' to 'label'")
+                                elif type_exists > 0 and label_exists > 0:
+                                    # Handle case where both exist
+                                    await conn.execute("ALTER TABLE userbot_dm_queue DROP COLUMN message_type")
+                                    logger.info("✅ Dropped redundant 'message_type'")
                             except Exception as e:
-                                logger.error(f"Error renaming message_type: {e}")
+                                logger.error(f"Error migrating message_type: {e}")
+
+                            # 5. Fix NOT NULL constraints on old columns that might be lingering
+                            try:
+                                await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN message_text SET NOT NULL")
+                                await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN label SET NOT NULL")
+                            except: pass
 
                             
                             # 4. FIX: Handle potential column naming variations and ensure 'label' or 'message_text' is large enough
