@@ -43,6 +43,8 @@ DATABASE_URL_ENV = os.getenv("DATABASE_URL_OVERRIDE") or DATABASE_URL
 DEBUG_GROUP_ID = int(os.getenv("DEBUG_GROUP_ID", "0"))
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 
+BOT_OWNER_USER_ID = int(os.getenv("BOT_OWNER_USER_ID", "6664440870"))
+
 class UserbotService:
     def __init__(self):
         self.client = None
@@ -107,62 +109,84 @@ class UserbotService:
                     )
                 """)
 
-    async def log_to_debug(self, message: str):
+    async def log_to_debug(self, message: str, tag_owner: bool = False):
         if not self.client or not self.client.is_connected:
             logger.info(f"DEBUG_LOG (Client not ready): {message}")
             return
             
         try:
-            await self.client.send_message(DEBUG_GROUP_ID, f"🤖 **Userbot Service**: {message}")
+            final_message = f"🤖 **Userbot Service**: {message}"
+            if tag_owner:
+                # Attempt to get owner username or just use ID if mention not possible
+                final_message += f"\n\n⚠️ Attention: [Owner](tg://user?id={BOT_OWNER_USER_ID})"
+            
+            await self.client.send_message(DEBUG_GROUP_ID, final_message)
         except Exception as e:
             logger.error(f"Failed to log to debug group via userbot: {e}")
             logger.info(f"DEBUG_LOG: {message}")
 
     async def start(self):
-        await self.init_db()
-        
-        if not self.db_pool:
-            logger.error("Database pool not initialized. Cannot start service.")
-            return
-
-        # Notify startup to debug group
-        await self.log_to_debug("🚀 **Userbot Service**: Initiating startup sequence...")
-
-        while self.running:
-            async with self.db_pool.acquire() as conn:
-                session_string = await conn.fetchval(
-                    "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
-                )
+        try:
+            await self.init_db()
             
-            if session_string:
-                break
-                
-            logger.info("Waiting for userbot session string in database...")
-            await asyncio.sleep(30)
-        
-        if not self.running:
-            return
+            if not self.db_pool:
+                logger.error("Database pool not initialized. Cannot start service.")
+                return
 
-        self.client = Client(
-            "userbot_service",
-            api_id=TELEGRAM_API_ID,
-            api_hash=TELEGRAM_API_HASH,
-            session_string=session_string,
-            device_model="PC 64bit",
-            system_version="Linux 6.8.0-1043-aws",
-            app_version="2.1.0",
-            lang_code="en",
-            no_updates=False,
-        )
-        
-        await self.client.start()
-        logger.info("Userbot Service Started")
-        await self.log_to_debug("✅ Userbot Service Started and Connected")
-        
-        await asyncio.gather(
-            self.dm_loop(),
-            self.peer_discovery_loop()
-        )
+            # Temporary client to send startup log before session is loaded
+            # Note: We can't really send to Telegram without the session, 
+            # so we ensure the log happens as soon as start() is called
+            logger.info("🚀 Userbot Service: Initiating startup sequence...")
+            
+            while self.running:
+                async with self.db_pool.acquire() as conn:
+                    session_string = await conn.fetchval(
+                        "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
+                    )
+                
+                if session_string:
+                    break
+                    
+                logger.info("Waiting for userbot session string in database...")
+                await asyncio.sleep(30)
+            
+            if not self.running:
+                return
+
+            self.client = Client(
+                "userbot_service",
+                api_id=TELEGRAM_API_ID,
+                api_hash=TELEGRAM_API_HASH,
+                session_string=session_string,
+                device_model="PC 64bit",
+                system_version="Linux 6.8.0-1043-aws",
+                app_version="2.1.0",
+                lang_code="en",
+                no_updates=False,
+            )
+            
+            await self.client.start()
+            logger.info("Userbot Service Started")
+            
+            # NOW send the notifications since we are connected
+            await self.log_to_debug("🚀 **Userbot Service**: Startup sequence complete.")
+            await self.log_to_debug("✅ **Userbot Service**: Connected and monitoring for DMs.")
+            
+            # Start task loops
+            await asyncio.gather(
+                self.dm_loop(),
+                self.peer_discovery_loop()
+            )
+            
+        except Exception as e:
+            # If the loop breaks or start fails, try to notify
+            try:
+                error_msg = f"‼️ **CRITICAL DISCONNECT**: Userbot service has crashed or stopped.\nError: {e}"
+                await self.log_to_debug(error_msg, tag_owner=True)
+            except:
+                pass
+            logger.error(f"Userbot Service encountered a fatal error: {e}")
+            raise
 
     async def peer_discovery_loop(self):
         """Ensures the userbot 'sees' users to establish Peer IDs."""
