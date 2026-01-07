@@ -5142,8 +5142,8 @@ class TelegramTradingBot:
                     CREATE TABLE IF NOT EXISTS userbot_dm_queue (
                         id SERIAL PRIMARY KEY,
                         user_id BIGINT NOT NULL,
-                        message_type VARCHAR(50) NOT NULL,
-                        message_content TEXT NOT NULL,
+                        message_text TEXT NOT NULL,
+                        label TEXT NOT NULL,
                         status VARCHAR(20) DEFAULT 'pending',
                         retry_count INTEGER DEFAULT 0,
                         last_attempt TIMESTAMP WITH TIME ZONE,

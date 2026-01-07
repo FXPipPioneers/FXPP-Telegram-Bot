@@ -124,6 +124,11 @@ class UserbotService:
                             if label_exists == 0:
                                 await conn.execute("ALTER TABLE userbot_dm_queue ADD COLUMN label TEXT DEFAULT 'manual'")
                                 logger.info("✅ Added missing 'label' column")
+
+                            # 4. FIX: Increase 'message_type' length to prevent "value too long" errors
+                            # This addresses the ERROR: value too long for type character varying(50)
+                            await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN message_type TYPE VARCHAR(255)")
+                            logger.info("✅ Increased message_type column length to 255")
                         except Exception as migration_err:
                             logger.error(f"❌ Migration during connection failed: {migration_err}")
 
