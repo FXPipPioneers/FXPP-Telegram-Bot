@@ -25,6 +25,14 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: CURRENCYBEACON_KEY
+        sync: false
+      - key: EXCHANGERATE_API_KEY
+        sync: false
+      - key: CURRENCYLAYER_KEY
+        sync: false
+      - key: ABSTRACTAPI_KEY
+        sync: false
 
   - type: worker
     name: userbot-service
