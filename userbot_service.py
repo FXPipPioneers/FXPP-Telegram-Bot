@@ -93,6 +93,40 @@ class UserbotService:
                     )
                     self.db_pool = pool
                     logger.info("Database connected successfully")
+
+                    # FORCE MIGRATION IMMEDIATELY AFTER SUCCESSFUL CONNECTION
+                    async with self.db_pool.acquire() as conn:
+                        logger.info("Running immediate database migration check...")
+                        try:
+                            # 1. Rename 'message' to 'message_text'
+                            msg_exists = await conn.fetchval("""
+                                SELECT count(*) FROM information_schema.columns 
+                                WHERE table_name = 'userbot_dm_queue' AND column_name = 'message'
+                            """)
+                            if msg_exists > 0:
+                                await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message TO message_text")
+                                logger.info("✅ Renamed 'message' to 'message_text'")
+                            
+                            # 2. Rename 'message_type' to 'message_text'
+                            type_exists = await conn.fetchval("""
+                                SELECT count(*) FROM information_schema.columns 
+                                WHERE table_name = 'userbot_dm_queue' AND column_name = 'message_type'
+                            """)
+                            if type_exists > 0:
+                                await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_type TO message_text")
+                                logger.info("✅ Renamed 'message_type' to 'message_text'")
+
+                            # 3. Add 'label' column if missing
+                            label_exists = await conn.fetchval("""
+                                SELECT count(*) FROM information_schema.columns 
+                                WHERE table_name = 'userbot_dm_queue' AND column_name = 'label'
+                            """)
+                            if label_exists == 0:
+                                await conn.execute("ALTER TABLE userbot_dm_queue ADD COLUMN label TEXT DEFAULT 'manual'")
+                                logger.info("✅ Added missing 'label' column")
+                        except Exception as migration_err:
+                            logger.error(f"❌ Migration during connection failed: {migration_err}")
+
                     break
                 except Exception as e:
                     if attempt == 9:
@@ -125,8 +159,17 @@ class UserbotService:
                     if type_exists > 0:
                         logger.info("Migrating userbot_dm_queue: renaming 'message_type' to 'message_text'")
                         await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_type TO message_text")
+
+                    # Check for 'label' column
+                    label_exists = await conn.fetchval("""
+                        SELECT count(*) FROM information_schema.columns 
+                        WHERE table_name = 'userbot_dm_queue' AND column_name = 'label'
+                    """)
+                    if label_exists == 0:
+                        logger.info("Migrating userbot_dm_queue: adding missing 'label' column")
+                        await conn.execute("ALTER TABLE userbot_dm_queue ADD COLUMN label TEXT DEFAULT 'manual'")
                 except Exception as e:
-                    logger.error(f"Migration error (renaming column): {e}")
+                    logger.error(f"Migration error (updating columns): {e}")
 
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS bot_settings (
