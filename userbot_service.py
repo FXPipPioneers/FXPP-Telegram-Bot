@@ -107,31 +107,37 @@ class UserbotService:
                                 await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message TO message_text")
                                 logger.info("✅ Renamed 'message' to 'message_text'")
 
-                            # 2. Rename 'message_content' to 'message_text' (Added to fix the not-null violation)
-                            content_exists = await conn.fetchval("""
-                                SELECT count(*) FROM information_schema.columns 
-                                WHERE table_name = 'userbot_dm_queue' AND column_name = 'message_content'
-                            """)
-                            if content_exists > 0:
-                                await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_content TO message_text")
-                                logger.info("✅ Renamed 'message_content' to 'message_text'")
+                            # 2. Rename 'message_content' to 'message_text'
+                            try:
+                                content_exists = await conn.fetchval("""
+                                    SELECT count(*) FROM information_schema.columns 
+                                    WHERE table_name = 'userbot_dm_queue' AND column_name = 'message_content'
+                                """)
+                                text_exists = await conn.fetchval("""
+                                    SELECT count(*) FROM information_schema.columns 
+                                    WHERE table_name = 'userbot_dm_queue' AND column_name = 'message_text'
+                                """)
+                                if content_exists > 0 and text_exists == 0:
+                                    await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_content TO message_text")
+                                    logger.info("✅ Renamed 'message_content' to 'message_text'")
+                            except Exception as e:
+                                logger.error(f"Error renaming message_content: {e}")
                             
-                            # Ensure message_text exists before attempting to set it to NOT NULL or resizing
-                            text_exists = await conn.fetchval("""
-                                SELECT count(*) FROM information_schema.columns 
-                                WHERE table_name = 'userbot_dm_queue' AND column_name = 'message_text'
-                            """)
-                            if text_exists > 0:
-                                # Ensure it's not null and TEXT type
-                                try:
-                                    await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN message_text SET NOT NULL")
-                                    await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN message_text TYPE TEXT")
-                                    logger.info("✅ Ensured 'message_text' is NOT NULL and TEXT type")
-                                except: pass
-                            else:
-                                # Create it if it really doesn't exist after all renames
-                                await conn.execute("ALTER TABLE userbot_dm_queue ADD COLUMN message_text TEXT NOT NULL DEFAULT ''")
-                                logger.info("✅ Added missing 'message_text' column")
+                            # 3. Rename 'message_type' to 'label'
+                            try:
+                                type_exists = await conn.fetchval("""
+                                    SELECT count(*) FROM information_schema.columns 
+                                    WHERE table_name = 'userbot_dm_queue' AND column_name = 'message_type'
+                                """)
+                                label_exists = await conn.fetchval("""
+                                    SELECT count(*) FROM information_schema.columns 
+                                    WHERE table_name = 'userbot_dm_queue' AND column_name = 'label'
+                                """)
+                                if type_exists > 0 and label_exists == 0:
+                                    await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_type TO label")
+                                    logger.info("✅ Renamed 'message_type' to 'label'")
+                            except Exception as e:
+                                logger.error(f"Error renaming message_type: {e}")
 
                             
                             # 4. FIX: Handle potential column naming variations and ensure 'label' or 'message_text' is large enough
