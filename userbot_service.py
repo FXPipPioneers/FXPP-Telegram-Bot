@@ -115,6 +115,8 @@ class UserbotService:
                             if type_exists > 0:
                                 await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_type TO message_text")
                                 logger.info("✅ Renamed 'message_type' to 'message_text'")
+                            else:
+                                logger.info("ℹ️ 'message_type' column does not exist, skipping rename.")
 
                             # 3. Add 'label' column if missing
                             label_exists = await conn.fetchval("""
@@ -124,11 +126,18 @@ class UserbotService:
                             if label_exists == 0:
                                 await conn.execute("ALTER TABLE userbot_dm_queue ADD COLUMN label TEXT DEFAULT 'manual'")
                                 logger.info("✅ Added missing 'label' column")
+                            
+                            # 4. FIX: Handle potential column naming variations and ensure 'label' or 'message_text' is large enough
+                            # We use TRY blocks for each to be safe
+                            try:
+                                await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN label TYPE TEXT")
+                                logger.info("✅ Ensured 'label' column is TEXT type")
+                            except: pass
 
-                            # 4. FIX: Increase 'message_type' length to prevent "value too long" errors
-                            # This addresses the ERROR: value too long for type character varying(50)
-                            await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN message_type TYPE VARCHAR(255)")
-                            logger.info("✅ Increased message_type column length to 255")
+                            try:
+                                await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN message_text TYPE TEXT")
+                                logger.info("✅ Ensured 'message_text' column is TEXT type")
+                            except: pass
                         except Exception as migration_err:
                             logger.error(f"❌ Migration during connection failed: {migration_err}")
 
