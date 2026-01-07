@@ -62,24 +62,30 @@ class UserbotService:
                 return
 
             # Standard SSL configuration for Render PostgreSQL
+            # Using ssl=True or a more robust context for asyncpg
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             
-            # Use Environment URL
-            url = DATABASE_URL_ENV
-            if not url and os.getenv("DATABASE_URL"):
-                url = os.getenv("DATABASE_URL")
+            # Ensure the URL is properly formatted for asyncpg (replacing postgres:// with postgresql:// if needed)
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql://", 1)
 
             # Try up to 5 times to connect to the database
             for attempt in range(5):
                 try:
+                    # Added statement_cache_size=0 to avoid prepared statement issues common in pooled connections
                     pool = await asyncpg.create_pool(
                         url,
                         min_size=1,
                         max_size=5,
                         command_timeout=60,
-                        ssl=ctx
+                        ssl=ctx,
+                        server_settings={
+                            'tcp_keepalives_idle': '60',
+                            'tcp_keepalives_interval': '10',
+                            'tcp_keepalives_count': '3'
+                        }
                     )
                     self.db_pool = pool
                     logger.info("Database connected successfully")
@@ -256,7 +262,7 @@ class UserbotService:
         except FloodWait as e:
             wait_time = float(e.value) if hasattr(e, 'value') and e.value else 60
             logger.warning(f"FloodWait: Waiting {wait_time}s")
-            await asyncio.sleep(wait_time)
+            await asyncio.sleep(int(wait_time))
             return await self.send_dm(user_id, message, label)
         except Exception as e:
             await self.log_to_debug(f"❌ Failed to send {label} to {user_id}: {e}")
