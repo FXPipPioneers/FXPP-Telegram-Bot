@@ -70,30 +70,35 @@ class UserbotService:
             # Ensure the URL is properly formatted for asyncpg (replacing postgres:// with postgresql:// if needed)
             if url.startswith("postgres://"):
                 url = url.replace("postgres://", "postgresql://", 1)
-
-            # Try up to 5 times to connect to the database
-            for attempt in range(5):
+            
+            # For Render internal/pooled connections, it's often safer to use ssl=True directly 
+            # or a more permissive context if the above still fails.
+            
+            # Try up to 10 times with increasing wait to handle Render network jitter
+            for attempt in range(10):
                 try:
-                    # Added statement_cache_size=0 to avoid prepared statement issues common in pooled connections
+                    # Added statement_cache_size=0 and adjusted timeouts
                     pool = await asyncpg.create_pool(
                         url,
                         min_size=1,
                         max_size=5,
                         command_timeout=60,
+                        connect_timeout=60,
                         ssl=ctx,
                         server_settings={
                             'tcp_keepalives_idle': '60',
                             'tcp_keepalives_interval': '10',
-                            'tcp_keepalives_count': '3'
+                            'tcp_keepalives_count': '3',
+                            'application_name': 'userbot_service'
                         }
                     )
                     self.db_pool = pool
                     logger.info("Database connected successfully")
                     break
                 except Exception as e:
-                    if attempt == 4:
+                    if attempt == 9:
                         raise
-                    wait_time = (attempt + 1) * 5
+                    wait_time = min((attempt + 1) * 2, 20)
                     logger.warning(f"Database connection attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
         except Exception as e:
