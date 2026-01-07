@@ -77,13 +77,12 @@ class UserbotService:
             # Try up to 10 times with increasing wait to handle Render network jitter
             for attempt in range(10):
                 try:
-                    # Added statement_cache_size=0 and adjusted timeouts
+                    # Removed connect_timeout as it is not a valid argument for create_pool in asyncpg
                     pool = await asyncpg.create_pool(
                         url,
                         min_size=1,
                         max_size=5,
                         command_timeout=60,
-                        connect_timeout=60,
                         ssl=ctx,
                         server_settings={
                             'tcp_keepalives_idle': '60',
