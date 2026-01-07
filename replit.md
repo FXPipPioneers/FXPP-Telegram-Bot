@@ -53,11 +53,19 @@ To ensure high performance and bypass Telegram API limitations, tasks are strict
 
 **CRITICAL NOTE**: This project is developed on Replit but **runs exclusively on Render.com**. 
 
+### Render Deployment Architecture
+To ensure 24/7 reliability, the system is deployed as two separate services:
+1.  **Main Bot (Web Service)**: Runs `telegram_bot.py`. It handles all group management, signal tracking, and admin commands.
+2.  **Userbot Service (Background Worker)**: Runs `userbot_service.py`. It operates as a high-performance background worker dedicated to processing the DM queue and peer discovery.
+
 ### Deployment Process (GitHub -> Render)
 1. Make code edits in Replit.
 2. **Update the Zip**: Recreate `telegram_bot_github.zip` containing `telegram_bot.py`, `userbot_service.py`, `requirements.txt`, `render.yaml`, `generate_session.py`, and `login_webapp.py`.
 3. Push the updated files to your GitHub repository.
-4. Render will automatically detect the push and redeploy both the Bot and Userbot services.
+4. **Manual Setup (If not using Blueprint)**:
+   - **Web Service**: Build Command: `pip install --upgrade pip && pip install -r requirements.txt`, Start Command: `python telegram_bot.py`.
+   - **Background Worker**: Build Command: `pip install --upgrade pip && pip install -r requirements.txt`, Start Command: `python userbot_service.py`.
+5. Ensure both services share the same `DATABASE_URL` environment variable.
 
 ### Monitoring & Safety
 - **Debug Group**: All status updates, errors, and admin actions are logged to a dedicated Debug Group.
