@@ -30,3 +30,15 @@ services:
         sync: false
       - key: TELEGRAM_DEFAULT_ROLES
         sync: false
+      - key: USERBOT_SESSION_STRING
+        sync: false
+      - key: FREE_GROUP_ID
+        sync: false
+      - key: VIP_GROUP_ID
+        sync: false
+      - key: DEBUG_GROUP_ID
+        sync: false
+      - key: BOT_OWNER_USER_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false

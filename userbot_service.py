@@ -153,54 +153,44 @@ class UserbotService:
 
     async def start(self):
         try:
-            # First try session string from environment variable (Secret)
+            # Strictly use session string from environment variable (Secret)
             session_string = os.getenv("USERBOT_SESSION_STRING")
             
             if not session_string:
+                logger.error("❌ USERBOT_SESSION_STRING NOT FOUND IN ENVIRONMENT.")
+                logger.info("Please set the USERBOT_SESSION_STRING environment variable in Render.")
+                return
+
+            # Initialize DB pool if URL is available (needed for DM queue)
+            try:
                 await self.init_db()
-                if not self.db_pool:
-                    logger.error("Database pool not initialized and no USERBOT_SESSION_STRING in environment.")
-                    return
+            except Exception as e:
+                logger.warning(f"Database initialization failed: {e}. Some features may be limited.")
             
-            # If we don't have a session string from env, we try to get it from DB
-            if not session_string and self.db_pool:
-                logger.info("🚀 Userbot Service: Initiating startup sequence (DB mode)...")
-                while self.running:
-                    async with self.db_pool.acquire() as conn:
-                        session_string = await conn.fetchval(
-                            "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
-                        )
-                    if session_string:
-                        break
-                    logger.info("Waiting for a valid userbot session string in database...")
-                    await asyncio.sleep(30)
-            
-            if session_string:
-                try:
-                    self.client = Client(
-                        "userbot_service",
-                        api_id=TELEGRAM_API_ID,
-                        api_hash=TELEGRAM_API_HASH,
-                        session_string=session_string,
-                        device_model="PC 64bit",
-                        system_version="Linux 6.8.0-1043-aws",
-                        app_version="2.1.0",
-                        lang_code="en",
-                        no_updates=False,
-                    )
-                    await self.client.start()
-                    logger.info("Userbot Service Started")
-                    
-                    # Resolve initial Peer IDs by fetching dialogs
-                    logger.info("Resolving initial Peer IDs...")
-                    async for dialog in self.client.get_dialogs(limit=50):
-                        pass
+            try:
+                logger.info("🚀 Userbot Service: Starting Pyrogram client with environment session...")
+                self.client = Client(
+                    "userbot_service",
+                    api_id=TELEGRAM_API_ID,
+                    api_hash=TELEGRAM_API_HASH,
+                    session_string=session_string,
+                    device_model="PC 64bit",
+                    system_version="Linux 6.8.0-1043-aws",
+                    app_version="2.1.0",
+                    lang_code="en",
+                    no_updates=False,
+                )
+                await self.client.start()
+                logger.info("✅ Userbot Service: Connected successfully!")
+                
+                # Resolve initial Peer IDs by fetching dialogs
+                logger.info("🔍 Resolving initial Peer IDs (human-mimic mode)...")
+                async for dialog in self.client.get_dialogs(limit=50):
+                    pass
+                logger.info("✅ Peer resolution complete.")
                         
-                except Exception as e:
-                    logger.error(f"Failed to start with session string: {e}")
-                    return
-            else:
-                logger.error("No session string available from environment or database.")
+            except Exception as e:
+                logger.error(f"Failed to start with session string: {e}")
                 return
             
             # Define group IDs locally if they are missing

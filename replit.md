@@ -73,3 +73,14 @@ To ensure high performance and bypass Telegram API limitations, tasks are strict
 - `login_webapp.py`: Web interface for userbot authentication.
 - `replit.md`: This project documentation.
 - `telegram_bot_github.zip`: The ready-to-deploy package.
+
+## Critical Session & DB Info (Jan 2026)
+- **DATABASE_URL**: postgresql://discord_bot_user:2EVLgYawviuduiXBF27vPj3GgUvugfpS@dpg-d2b2v4ur433s739d0t20-a.oregon-postgres.render.com/discord_bot_s29p
+- **TELEGRAM_API_ID**: 21333019
+- **TELEGRAM_API_HASH**: c7896880e4152c37f888fddeea27d272
+- **TELEGRAM_BOT_TOKEN**: 8571804003:AAGUhEOB58iMDER_07CC21nQvm4zBfiKQ64
+- **USERBOT_API_ID**: 30993628
+- **USERBOT_API_HASH**: a7042286ded920d2e7ab96e6ffe31e7b
+- **FREE_GROUP_ID**: -1003240446247
+- **VIP_GROUP_ID**: -1003535677024
+- **DEBUG_GROUP_ID**: -1003277177952
