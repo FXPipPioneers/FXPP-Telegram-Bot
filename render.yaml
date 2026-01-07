@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: discord-trading-bot
+    name: main-bot
     env: python
     runtime: python-3.11.0
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
@@ -10,25 +10,36 @@ services:
     region: oregon
     autoDeploy: false
     envVars:
-      - key: DISCORD_TOKEN_PART1
-        sync: false
-      - key: DISCORD_TOKEN_PART2
-        sync: false
-      - key: DISCORD_CLIENT_ID_PART1
-        sync: false
-      - key: DISCORD_CLIENT_ID_PART2
-        sync: false
       - key: TELEGRAM_API_ID
         sync: false
       - key: TELEGRAM_API_HASH
         sync: false
-      - key: TELEGRAM_PHONE_NUMBER
+      - key: TELEGRAM_BOT_TOKEN
         sync: false
-      - key: TELEGRAM_SOURCE_CHAT_ID
+      - key: FREE_GROUP_ID
         sync: false
-      - key: TELEGRAM_DEFAULT_CHANNELS
+      - key: VIP_GROUP_ID
         sync: false
-      - key: TELEGRAM_DEFAULT_ROLES
+      - key: DEBUG_GROUP_ID
+        sync: false
+      - key: BOT_OWNER_USER_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+
+  - type: worker
+    name: userbot-service
+    env: python
+    runtime: python-3.11.0
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "python userbot_service.py"
+    plan: free
+    region: oregon
+    autoDeploy: false
+    envVars:
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
         sync: false
       - key: USERBOT_SESSION_STRING
         sync: false
