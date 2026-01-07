@@ -106,17 +106,27 @@ class UserbotService:
         
         if self.db_pool:
             async with self.db_pool.acquire() as conn:
-                # Forced migration: Rename 'message' to 'message_text' if it exists
+                # Forced migration: Rename 'message' or 'message_type' to 'message_text' if they exist
                 try:
-                    column_exists = await conn.fetchval("""
+                    # Check for 'message'
+                    message_exists = await conn.fetchval("""
                         SELECT count(*) FROM information_schema.columns 
                         WHERE table_name = 'userbot_dm_queue' AND column_name = 'message'
                     """)
-                    if column_exists > 0:
+                    if message_exists > 0:
                         logger.info("Migrating userbot_dm_queue: renaming 'message' to 'message_text'")
                         await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message TO message_text")
+                    
+                    # Check for 'message_type' (which seems to be what it actually is on Render right now)
+                    type_exists = await conn.fetchval("""
+                        SELECT count(*) FROM information_schema.columns 
+                        WHERE table_name = 'userbot_dm_queue' AND column_name = 'message_type'
+                    """)
+                    if type_exists > 0:
+                        logger.info("Migrating userbot_dm_queue: renaming 'message_type' to 'message_text'")
+                        await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message_type TO message_text")
                 except Exception as e:
-                    logger.error(f"Migration error (renaming message): {e}")
+                    logger.error(f"Migration error (renaming column): {e}")
 
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS bot_settings (
