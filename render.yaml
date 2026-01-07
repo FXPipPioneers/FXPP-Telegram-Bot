@@ -1,8 +1,7 @@
 services:
   - type: web
     name: main-bot
-    env: python
-    runtime: python-3.11.0
+    runtime: python
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     startCommand: "python telegram_bot.py"
     healthCheckPath: /health
@@ -29,8 +28,7 @@ services:
 
   - type: worker
     name: userbot-service
-    env: python
-    runtime: python-3.11.0
+    runtime: python
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     startCommand: "python userbot_service.py"
     plan: free
