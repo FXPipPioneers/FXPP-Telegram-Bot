@@ -43,7 +43,7 @@ DATABASE_URL_ENV = os.getenv("DATABASE_URL_OVERRIDE") or DATABASE_URL
 DEBUG_GROUP_ID = int(os.getenv("DEBUG_GROUP_ID", "0"))
 AMSTERDAM_TZ = pytz.timezone('Europe/Amsterdam')
 
-BOT_OWNER_USER_ID = int(os.getenv("BOT_OWNER_USER_ID", "6664440870"))
+BOT_OWNER_USER_ID = int(os.getenv("BOT_OWNER_USER_ID") or "6664440870")
 
 class UserbotService:
     def __init__(self):
@@ -65,6 +65,11 @@ class UserbotService:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
+            
+            # Use Environment URL
+            url = DATABASE_URL_ENV
+            if not url and os.getenv("DATABASE_URL"):
+                url = os.getenv("DATABASE_URL")
 
             # Try up to 5 times to connect to the database
             for attempt in range(5):
@@ -91,6 +96,18 @@ class UserbotService:
         
         if self.db_pool:
             async with self.db_pool.acquire() as conn:
+                # Forced migration: Rename 'message' to 'message_text' if it exists
+                try:
+                    column_exists = await conn.fetchval("""
+                        SELECT count(*) FROM information_schema.columns 
+                        WHERE table_name = 'userbot_dm_queue' AND column_name = 'message'
+                    """)
+                    if column_exists > 0:
+                        logger.info("Migrating userbot_dm_queue: renaming 'message' to 'message_text'")
+                        await conn.execute("ALTER TABLE userbot_dm_queue RENAME COLUMN message TO message_text")
+                except Exception as e:
+                    logger.error(f"Migration error (renaming message): {e}")
+
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS bot_settings (
                         setting_key VARCHAR(100) PRIMARY KEY,
@@ -110,67 +127,93 @@ class UserbotService:
                 """)
 
     async def log_to_debug(self, message: str, tag_owner: bool = False):
-        if not self.client or not self.client.is_connected:
-            logger.info(f"DEBUG_LOG (Client not ready): {message}")
-            return
-            
         try:
-            final_message = f"🤖 **Userbot Service**: {message}"
+            if not self.client or not self.client.is_connected:
+                logger.info(f"DEBUG_LOG (Client not ready): {message}")
+                return
+                
+            # The user wants the Userbot account itself to send the message
+            # without the "🤖 Userbot Service:" prefix if it's already identifying itself
+            final_message = message
             if tag_owner:
-                # Attempt to get owner username or just use ID if mention not possible
                 final_message += f"\n\n⚠️ Attention: [Owner](tg://user?id={BOT_OWNER_USER_ID})"
             
-            await self.client.send_message(DEBUG_GROUP_ID, final_message)
+            try:
+                # This call uses the Userbot account (Client) to send the message
+                await self.client.send_message(DEBUG_GROUP_ID, final_message)
+            except PeerIdInvalid:
+                logger.info("Resolving Peer ID for Debug Group via dialogs...")
+                async for dialog in self.client.get_dialogs():
+                    if dialog.chat.id == DEBUG_GROUP_ID:
+                        await self.client.send_message(DEBUG_GROUP_ID, final_message)
+                        break
         except Exception as e:
             logger.error(f"Failed to log to debug group via userbot: {e}")
             logger.info(f"DEBUG_LOG: {message}")
 
     async def start(self):
         try:
-            await self.init_db()
+            # First try session string from environment variable (Secret)
+            session_string = os.getenv("USERBOT_SESSION_STRING")
             
-            if not self.db_pool:
-                logger.error("Database pool not initialized. Cannot start service.")
-                return
-
-            # Temporary client to send startup log before session is loaded
-            # Note: We can't really send to Telegram without the session, 
-            # so we ensure the log happens as soon as start() is called
-            logger.info("🚀 Userbot Service: Initiating startup sequence...")
+            if not session_string:
+                await self.init_db()
+                if not self.db_pool:
+                    logger.error("Database pool not initialized and no USERBOT_SESSION_STRING in environment.")
+                    return
             
-            while self.running:
-                async with self.db_pool.acquire() as conn:
-                    session_string = await conn.fetchval(
-                        "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
+            # If we don't have a session string from env, we try to get it from DB
+            if not session_string and self.db_pool:
+                logger.info("🚀 Userbot Service: Initiating startup sequence (DB mode)...")
+                while self.running:
+                    async with self.db_pool.acquire() as conn:
+                        session_string = await conn.fetchval(
+                            "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
+                        )
+                    if session_string:
+                        break
+                    logger.info("Waiting for a valid userbot session string in database...")
+                    await asyncio.sleep(30)
+            
+            if session_string:
+                try:
+                    self.client = Client(
+                        "userbot_service",
+                        api_id=TELEGRAM_API_ID,
+                        api_hash=TELEGRAM_API_HASH,
+                        session_string=session_string,
+                        device_model="PC 64bit",
+                        system_version="Linux 6.8.0-1043-aws",
+                        app_version="2.1.0",
+                        lang_code="en",
+                        no_updates=False,
                     )
-                
-                if session_string:
-                    break
+                    await self.client.start()
+                    logger.info("Userbot Service Started")
                     
-                logger.info("Waiting for userbot session string in database...")
-                await asyncio.sleep(30)
-            
-            if not self.running:
+                    # Resolve initial Peer IDs by fetching dialogs
+                    logger.info("Resolving initial Peer IDs...")
+                    async for dialog in self.client.get_dialogs(limit=50):
+                        pass
+                        
+                except Exception as e:
+                    logger.error(f"Failed to start with session string: {e}")
+                    return
+            else:
+                logger.error("No session string available from environment or database.")
                 return
-
-            self.client = Client(
-                "userbot_service",
-                api_id=TELEGRAM_API_ID,
-                api_hash=TELEGRAM_API_HASH,
-                session_string=session_string,
-                device_model="PC 64bit",
-                system_version="Linux 6.8.0-1043-aws",
-                app_version="2.1.0",
-                lang_code="en",
-                no_updates=False,
-            )
             
-            await self.client.start()
-            logger.info("Userbot Service Started")
+            # Define group IDs locally if they are missing
+            global FREE_GROUP_ID, VIP_GROUP_ID
+            FREE_GROUP_ID = int(os.getenv("FREE_GROUP_ID", "0"))
+            VIP_GROUP_ID = int(os.getenv("VIP_GROUP_ID", "0"))
             
             # NOW send the notifications since we are connected
-            await self.log_to_debug("🚀 **Userbot Service**: Startup sequence complete.")
-            await self.log_to_debug("✅ **Userbot Service**: Connected and monitoring for DMs.")
+            try:
+                await self.log_to_debug("🚀 **Userbot Service**: Startup sequence complete.")
+                await self.log_to_debug("✅ **Userbot Service**: Connected and monitoring for DMs.")
+            except Exception as log_err:
+                logger.error(f"Failed to send startup debug logs: {log_err}")
             
             # Start task loops
             await asyncio.gather(
@@ -263,14 +306,14 @@ class UserbotService:
                             sent_check = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '24h Warning' AND created_at > $2", member_id, current_time - timedelta(days=1))
                             if not sent_check:
                                 msg = "**REMINDER! Your 3-day free trial for our VIP Group will expire in 24 hours**.\n\nAfter that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
-                                await conn.execute("INSERT INTO userbot_dm_queue (user_id, message, label, status) VALUES ($1, $2, '24h Warning', 'pending')", member_id, msg)
+                                await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '24h Warning', 'pending')", member_id, msg)
 
                         # 3h Warning
                         if 2.5 <= hours_left <= 3.5:
                             sent_check = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '3h Warning' AND created_at > $2", member_id, current_time - timedelta(days=1))
                             if not sent_check:
                                 msg = "**FINAL REMINDER! Your 3-day free trial for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. Upgrade to VIP to keep your access: https://whop.com/gold-pioneer/gold-pioneer/"
-                                await conn.execute("INSERT INTO userbot_dm_queue (user_id, message, label, status) VALUES ($1, $2, '3h Warning', 'pending')", member_id, msg)
+                                await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '3h Warning', 'pending')", member_id, msg)
 
                     # 2.1 Handle Trial Expiration (Userbot handles the DM)
                     expired_members = await conn.fetch("""
@@ -282,7 +325,7 @@ class UserbotService:
                         sent_check = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Expired' AND created_at > $2", member_id, current_time - timedelta(hours=1))
                         if not sent_check:
                             msg = "Hey! Your **3-day free access** to the VIP Group has unfortunately **ran out**. We truly hope you were able to benefit with us & we hope to see you back soon!"
-                            await conn.execute("INSERT INTO userbot_dm_queue (user_id, message, label, status) VALUES ($1, $2, 'Trial Expired', 'pending')", member_id, msg)
+                            await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, 'Trial Expired', 'pending')", member_id, msg)
 
                     # 3. Handle Retention Follow-ups (3, 7, 14 days)
                     followups = await conn.fetch("SELECT member_id, role_expired, dm_3_sent, dm_7_sent, dm_14_sent FROM dm_schedule")

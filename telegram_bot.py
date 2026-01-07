@@ -568,26 +568,75 @@ class TelegramTradingBot:
             if not await self.is_owner(message.from_user.id):
                 return
             
-            parts = message.text.split()
-            if len(parts) < 2:
-                await message.reply("❌ Usage: `/setsession <your_session_string>`")
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📝 Set Session String", callback_query_data="ss_set")],
+                [InlineKeyboardButton("🗑️ Remove Current Session", callback_query_data="ss_remove")],
+                [InlineKeyboardButton("📊 Check Status", callback_query_data="ss_status")]
+            ])
+            
+            await message.reply_text(
+                "🤖 **Userbot Session Manager**\n\n"
+                "Manage your userbot's connection string below:",
+                reply_markup=keyboard
+            )
+
+        @self.app.on_callback_query(filters.regex("^ss_"))
+        async def session_callback(client, callback_query: CallbackQuery):
+            if not await self.is_owner(callback_query.from_user.id):
+                await callback_query.answer("❌ Unauthorized", show_alert=True)
                 return
             
-            session_string = parts[1]
-            if not self.db_pool:
-                await message.reply("❌ Database connection not available.")
-                return
+            data = callback_query.data
+            
+            if data == "ss_set":
+                await callback_query.message.edit_text(
+                    "📝 **Set New Session String**\n\n"
+                    "Please send the session string directly as a message.\n"
+                    "Tip: Use `generate_session.py` to create one locally."
+                )
+                self.userbot_login_state[callback_query.from_user.id] = {"awaiting_session": True}
+            
+            elif data == "ss_remove":
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute("DELETE FROM bot_settings WHERE setting_key = 'userbot_session_string'")
+                await callback_query.answer("✅ Session string removed from database", show_alert=True)
+                await callback_query.message.edit_text(
+                    "🗑️ **Session Removed**\n\n"
+                    "The userbot session string has been deleted. The service will wait for a new string to be set."
+                )
+            
+            elif data == "ss_status":
+                async with self.db_pool.acquire() as conn:
+                    session = await conn.fetchval("SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'")
                 
-            try:
+                status = "🟢 Set" if session else "🔴 Not Set"
+                await callback_query.answer(f"Current Status: {status}", show_alert=True)
+
+        @self.app.on_message(filters.text & filters.private)
+        async def handle_all_text(client, message: Message):
+            user_id = message.from_user.id
+            state = self.userbot_login_state.get(user_id)
+            
+            if state and state.get("awaiting_session"):
+                session_string = message.text.strip()
+                if len(session_string) < 50: # Basic validation
+                    await message.reply_text("❌ Invalid session string. It should be much longer.")
+                    return
+                
                 async with self.db_pool.acquire() as conn:
                     await conn.execute("""
-                        INSERT INTO bot_settings (setting_key, setting_value)
+                        INSERT INTO bot_settings (setting_key, setting_value) 
                         VALUES ('userbot_session_string', $1)
                         ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1
                     """, session_string)
-                await message.reply("✅ **Success!** Userbot session has been manually updated in the database.")
-            except Exception as e:
-                await message.reply(f"❌ Error saving session: {str(e)}")
+                
+                await message.reply_text("✅ **Success!** Session string updated. The Userbot Service will pick it up shortly.")
+                self.userbot_login_state.pop(user_id, None)
+                await self.log_to_debug(f"🔑 Userbot session has been manually updated by {user_id}")
+                return
+
+            # Fallback for other text handling if needed
+            pass
 
         @self.app.on_message(filters.command("login"))
         async def login_command(client, message: Message):
@@ -3045,7 +3094,7 @@ class TelegramTradingBot:
             try:
                 async with self.db_pool.acquire() as conn:
                     await conn.execute(
-                        "INSERT INTO userbot_dm_queue (user_id, message, label, status) VALUES ($1, $2, $3, 'pending')",
+                        "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, $3, 'pending')",
                         user_id, welcome_msg, "Welcome DM (Manual)"
                     )
                 
@@ -3900,7 +3949,11 @@ class TelegramTradingBot:
             except Exception as e:
                 error_msg = f"❌ Error tracking free group join for {user.id}: {e}"
                 logger.error(error_msg)
-                await self.log_to_debug(error_msg)
+                # Avoid infinite error loop if debug logging fails too
+                try:
+                    await self.log_to_debug(error_msg)
+                except:
+                    pass
 
     async def show_member_db_widget(self, message):
         async with self.db_pool.acquire() as conn:
@@ -6149,7 +6202,7 @@ class TelegramTradingBot:
                 if self.db_pool:
                     async with self.db_pool.acquire() as conn:
                         await conn.execute(
-                            "INSERT INTO userbot_dm_queue (user_id, message, label) VALUES ($1, $2, $3)",
+                            "INSERT INTO userbot_dm_queue (user_id, message_text, label) VALUES ($1, $2, $3)",
                             int(member_id), expiry_msg, "Trial Expired"
                         )
                 else:
@@ -6262,12 +6315,15 @@ class TelegramTradingBot:
     async def handle_welcome_dm_fallback(self, user_id: int, first_name: str, msg_type: str, message_content: str):
         """Final safety: All DMs MUST go to queue, never sent from here"""
         if self.db_pool:
-            async with self.db_pool.acquire() as conn:
-                await conn.execute('''
-                    INSERT INTO userbot_dm_queue (user_id, message, label)
-                    VALUES ($1, $2, $3)
-                ''', user_id, message_content, msg_type)
-            logger.info(f"✅ Safe-routed DM for {user_id} to Userbot queue")
+            try:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute('''
+                        INSERT INTO userbot_dm_queue (user_id, message_text, label)
+                        VALUES ($1, $2, $3)
+                    ''', user_id, message_content, msg_type)
+                logger.info(f"✅ Safe-routed DM for {user_id} to Userbot queue")
+            except Exception as e:
+                logger.error(f"❌ Error in fallback DM queue for {user_id}: {e}")
         else:
             logger.error(f"❌ Cannot send DM to {user_id}: No DB pool and DMs disabled in main bot")
 
