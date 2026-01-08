@@ -153,6 +153,18 @@ class UserbotService:
                                 await conn.execute("ALTER TABLE userbot_dm_queue ALTER COLUMN label SET NOT NULL")
                             except: pass
 
+                            # 6. Ensure sent_at column exists
+                            try:
+                                has_sent_at = await conn.fetchval("""
+                                    SELECT count(*) FROM information_schema.columns 
+                                    WHERE table_name = 'userbot_dm_queue' AND column_name = 'sent_at'
+                                """)
+                                if has_sent_at == 0:
+                                    await conn.execute("ALTER TABLE userbot_dm_queue ADD COLUMN sent_at TIMESTAMP WITH TIME ZONE")
+                                    logger.info("✅ Added missing 'sent_at' column")
+                            except Exception as e:
+                                logger.error(f"Error adding sent_at column: {e}")
+
                             
                             # 4. FIX: Handle potential column naming variations and ensure 'label' or 'message_text' is large enough
                             # We use TRY blocks for each to be safe
@@ -212,6 +224,28 @@ class UserbotService:
                 except Exception as e:
                     logger.error(f"Migration error (updating columns): {e}")
 
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS active_members (
+                        member_id BIGINT PRIMARY KEY,
+                        role_added_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                        role_id BIGINT NOT NULL,
+                        guild_id BIGINT NOT NULL,
+                        weekend_delayed BOOLEAN DEFAULT FALSE,
+                        expiry_time TIMESTAMP WITH TIME ZONE,
+                        custom_duration BOOLEAN DEFAULT FALSE,
+                        monday_notification_sent BOOLEAN DEFAULT FALSE
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS dm_schedule (
+                        member_id BIGINT PRIMARY KEY,
+                        role_expired TIMESTAMP WITH TIME ZONE NOT NULL,
+                        guild_id BIGINT NOT NULL,
+                        dm_3_sent BOOLEAN DEFAULT FALSE,
+                        dm_7_sent BOOLEAN DEFAULT FALSE,
+                        dm_14_sent BOOLEAN DEFAULT FALSE
+                    )
+                """)
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS bot_settings (
                         setting_key VARCHAR(100) PRIMARY KEY,
@@ -376,13 +410,42 @@ class UserbotService:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
                 async with self.db_pool.acquire() as conn:
-                    # 1. Check for pending Welcome DMs - DEPRECATED (Now handled via userbot_dm_queue)
-                    # welcome_pending = await conn.fetch("""
-                    #     SELECT user_id FROM peer_id_checks 
-                    #     WHERE NOT welcome_dm_sent AND peer_id_established
-                    # """)
-                    # for row in welcome_pending:
-                    #     ... (Logic removed to centralize in queue)
+                    # 1. Daily 9AM Trial Offer for members who haven't accepted yet
+                    if current_time.hour == 9 and current_time.minute < 10:
+                        # Check if we already processed this hour today
+                        last_global_offer = await conn.fetchval("SELECT setting_value FROM bot_settings WHERE setting_key = 'last_9am_offer_run'")
+                        today_str = current_time.strftime('%Y-%m-%d')
+                        
+                        if last_global_offer != today_str:
+                            # Ensure column exists
+                            await conn.execute("ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS last_daily_offer_at TIMESTAMP WITH TIME ZONE")
+                            
+                            # Find users who joined Free group but aren't in active_members and haven't received the daily offer today or yesterday (skip 1 day logic)
+                            pending_trial_users = await conn.fetch("""
+                                SELECT p.user_id 
+                                FROM peer_id_checks p
+                                LEFT JOIN active_members a ON p.user_id = a.member_id
+                                WHERE a.member_id IS NULL 
+                                AND p.peer_id_established = TRUE
+                                AND (p.last_daily_offer_at IS NULL OR p.last_daily_offer_at < $1)
+                            """, current_time - timedelta(days=2))
+
+                            for row in pending_trial_users:
+                                user_id = row['user_id']
+                                # Double check if they aren't already queued for the same offer recently
+                                exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Daily Trial Offer' AND created_at > $2", user_id, current_time - timedelta(hours=23))
+                                if not exists:
+                                    msg = "Want to try our VIP Group for FREE?\n\nWe're offering a 3-day free trial of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\nYour free trial will automatically be activated once you join our VIP group through this link: https://t.me/+5X18tTjgM042ODU0"
+                                    
+                                    # Queue DM
+                                    await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, 'Daily Trial Offer', 'pending')", user_id, msg)
+                                    
+                                    # Update last_daily_offer_at to current_time to ensure it skips tomorrow
+                                    await conn.execute("UPDATE peer_id_checks SET last_daily_offer_at = $1 WHERE user_id = $2", current_time, user_id)
+                                    await self.log_to_debug(f"📅 Queued Daily Trial Offer for {user_id} (Skipping tomorrow)")
+                            
+                            # Mark this day as run
+                            await conn.execute("INSERT INTO bot_settings (setting_key, setting_value) VALUES ('last_9am_offer_run', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", today_str)
 
                     # 2. Handle Trial Expiry Warnings (24h and 3h)
                     active_members = await conn.fetch("SELECT member_id, expiry_time FROM active_members")

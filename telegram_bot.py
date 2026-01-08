@@ -392,9 +392,6 @@ class TelegramTradingBot:
                 # Basic initialization for Render's external Postgres
                 import asyncpg
                 import ssl
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
                 
                 async def _init_pool():
                     for attempt in range(5):
@@ -410,6 +407,11 @@ class TelegramTradingBot:
                                 ssl=local_ctx
                             )
                             print("Database pool successfully initialized")
+                            
+                            # Initialize tables
+                            async with self.db_pool.acquire() as conn:
+                                await self.initialize_all_tables(conn)
+                                await self.initialize_additional_tables(conn)
                             return
                         except Exception as e:
                             wait_time = (attempt + 1) * 5
@@ -563,118 +565,6 @@ class TelegramTradingBot:
                 return
             await self.handle_member_db_callback(client, callback_query)
 
-        @self.app.on_message(filters.command("setsession"))
-        async def setsession_command(client, message: Message):
-            if not await self.is_owner(message.from_user.id):
-                return
-            
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📝 Set Session String", callback_query_data="ss_set")],
-                [InlineKeyboardButton("🗑️ Remove Current Session", callback_query_data="ss_remove")],
-                [InlineKeyboardButton("📊 Check Status", callback_query_data="ss_status")]
-            ])
-            
-            await message.reply_text(
-                "🤖 **Userbot Session Manager**\n\n"
-                "Manage your userbot's connection string below:",
-                reply_markup=keyboard
-            )
-
-        @self.app.on_callback_query(filters.regex("^ss_"))
-        async def session_callback(client, callback_query: CallbackQuery):
-            if not await self.is_owner(callback_query.from_user.id):
-                await callback_query.answer("❌ Unauthorized", show_alert=True)
-                return
-            
-            data = callback_query.data
-            
-            if data == "ss_set":
-                await callback_query.message.edit_text(
-                    "📝 **Set New Session String**\n\n"
-                    "Please send the session string directly as a message.\n"
-                    "Tip: Use `generate_session.py` to create one locally."
-                )
-                self.userbot_login_state[callback_query.from_user.id] = {"awaiting_session": True}
-            
-            elif data == "ss_remove":
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute("DELETE FROM bot_settings WHERE setting_key = 'userbot_session_string'")
-                await callback_query.answer("✅ Session string removed from database", show_alert=True)
-                await callback_query.message.edit_text(
-                    "🗑️ **Session Removed**\n\n"
-                    "The userbot session string has been deleted. The service will wait for a new string to be set."
-                )
-            
-            elif data == "ss_status":
-                async with self.db_pool.acquire() as conn:
-                    session = await conn.fetchval("SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'")
-                
-                status = "🟢 Set" if session else "🔴 Not Set"
-                await callback_query.answer(f"Current Status: {status}", show_alert=True)
-
-        @self.app.on_message(filters.text & filters.private)
-        async def handle_all_text(client, message: Message):
-            user_id = message.from_user.id
-            state = self.userbot_login_state.get(user_id)
-            
-            if state and state.get("awaiting_session"):
-                session_string = message.text.strip()
-                if len(session_string) < 50: # Basic validation
-                    await message.reply_text("❌ Invalid session string. It should be much longer.")
-                    return
-                
-                async with self.db_pool.acquire() as conn:
-                    await conn.execute("""
-                        INSERT INTO bot_settings (setting_key, setting_value) 
-                        VALUES ('userbot_session_string', $1)
-                        ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1
-                    """, session_string)
-                
-                await message.reply_text("✅ **Success!** Session string updated. The Userbot Service will pick it up shortly.")
-                self.userbot_login_state.pop(user_id, None)
-                await self.log_to_debug(f"🔑 Userbot session has been manually updated by {user_id}")
-                return
-
-            # Fallback for other text handling if needed
-            pass
-
-        @self.app.on_message(filters.command("login"))
-        async def login_command(client, message: Message):
-            if not await self.is_owner(message.from_user.id):
-                return
-            
-            # Use text-based logic for /login status
-            parts = message.text.split()
-            if len(parts) > 1:
-                subcommand = parts[1].lower()
-                if subcommand == "status":
-                    await self.handle_login_status(client, message)
-                    return
-                elif subcommand == "setup":
-                    await self.handle_login_setup(client, message)
-                    return
-
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("📊 Check Status", callback_data="login_status"),
-                    InlineKeyboardButton("🔑 Start Setup", callback_data="login_setup")
-                ]
-            ])
-            await message.reply(
-                "**Userbot Login Management System**\n\n"
-                "Use the buttons below to manage your Userbot session.",
-                reply_markup=keyboard
-            )
-
-        @self.app.on_callback_query(filters.regex("^login_"))
-        async def login_callback(client, callback_query: CallbackQuery):
-            if not await self.is_owner(callback_query.from_user.id):
-                await callback_query.answer("Unauthorized.", show_alert=True)
-                return
-
-            action = callback_query.data.split("_")[1]
-            if action == "status":
-                await callback_query.answer()
                 await self.handle_login_status(client, callback_query.message)
             elif action == "setup":
                 await callback_query.answer()
@@ -760,216 +650,7 @@ class TelegramTradingBot:
             return True
         return user_id == BOT_OWNER_USER_ID
 
-    async def handle_login_status(self, client, message: Message):
-        """Check the status of the Userbot service"""
-        if not self.db_pool:
-            await message.reply("❌ Database connection not available.")
-            return
 
-        try:
-            async with self.db_pool.acquire() as conn:
-                session = await conn.fetchval(
-                    "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
-                )
-            
-            if not session:
-                await message.reply("🔴 **Userbot Status**: Disconnected (No session found).")
-            else:
-                await message.reply("🟢 **Userbot Status**: Connected (Session exists in database).")
-        except Exception as e:
-            await message.reply(f"❌ Error checking status: {str(e)}")
-
-    async def handle_login_setup(self, client, message: Message):
-        """Initiate Userbot Setup (Login)"""
-        logger.info(f"handle_login_setup triggered by {message.from_user.id}")
-        
-        # Explicitly trust the person who triggered the setup
-        user_id = message.from_user.id
-        logger.info(f"Adding {user_id} to temporary trusted session handlers")
-        
-        # New approach: Global capture flag
-        self.userbot_login_state['global_intercept'] = True
-        self.userbot_login_state['active_user'] = user_id
-        
-        if not self.db_pool:
-            logger.error("Database pool not initialized")
-            await message.reply("❌ Database connection not available.")
-            return
-
-        user_id = message.from_user.id
-        phone = os.getenv("USERBOT_PHONE")
-        api_id = safe_int(os.getenv("USERBOT_API_ID", "0"))
-        api_hash = os.getenv("USERBOT_API_HASH", "")
-
-        logger.info(f"Using Phone: {phone}, API_ID: {api_id}")
-
-        if not phone or not api_id or not api_hash:
-            logger.error("Userbot credentials missing in environment")
-            await message.reply(
-                "❌ **Userbot credentials missing.**\n\n"
-                "Please ensure `USERBOT_PHONE`, `USERBOT_API_ID`, and `USERBOT_API_HASH` "
-                "are set in your Render environment variables."
-            )
-            return
-
-        msg = await message.reply(f"🔄 **Starting Userbot Login** for `{phone}`...\nRequesting code from Telegram...")
-
-        try:
-            # Cleanup previous state if any
-            if user_id in self.userbot_login_state:
-                logger.info(f"Cleaning up old login state for {user_id}")
-                try:
-                    await self.userbot_login_state[user_id]["client"].disconnect()
-                except:
-                    pass
-                del self.userbot_login_state[user_id]
-
-            # Create a temporary client for login
-            logger.info("Initializing temporary Pyrogram client with official device info")
-            # Clear any existing local session files for the temp client to ensure a fresh start
-            temp_session_path = f"temp_userbot_{user_id}.session"
-            if os.path.exists(temp_session_path):
-                try: os.remove(temp_session_path)
-                except: pass
-
-            temp_client = Client(
-                name=f"temp_userbot_{user_id}",
-                api_id=api_id,
-                api_hash=api_hash,
-                in_memory=True,
-                device_model="PC 64bit",
-                system_version="Linux 6.8.0-1043-aws",
-                app_version="2.1.0",
-                lang_code="en",
-                system_lang_code="en-US"
-            )
-            
-            logger.info("Connecting to Telegram...")
-            await temp_client.connect()
-            
-            logger.info("Sending code...")
-            # Request phone code
-            try:
-                code_info = await temp_client.send_code(phone)
-                logger.info(f"Code sent successfully. Hash: {code_info.phone_code_hash}")
-                
-                self.userbot_login_state[user_id] = {
-                    "client": temp_client,
-                    "phone": phone,
-                    "phone_code_hash": code_info.phone_code_hash
-                }
-
-                await msg.edit_text(
-                    "📩 **Code Sent!**\n\nPlease check your Telegram account for the 5-digit verification code and reply with it here.\n\n"
-                    "**Format:** Just send the 5 digits (e.g., `12345`)."
-                )
-            except FloodWait as e:
-                logger.error(f"FloodWait: {e.value} seconds")
-                await msg.edit_text(f"⚠️ **Telegram Rate Limit:** Please wait {e.value} seconds before trying again.")
-                await temp_client.disconnect()
-            except Exception as e:
-                logger.error(f"Error sending code: {e}")
-                await msg.edit_text(f"❌ **Failed to send code:** `{str(e)}`")
-                await temp_client.disconnect()
-
-        except Exception as e:
-            logger.exception("Failed to initiate userbot login")
-            await msg.edit_text(f"❌ **Failed to initiate login:**\n`{str(e)}`")
-            if user_id in self.userbot_login_state:
-                del self.userbot_login_state[user_id]
-
-    async def process_userbot_code(self, client, message: Message, override_user_id: int = None):
-        """Process the 5-digit code sent by the owner"""
-        user_id = override_user_id or message.from_user.id
-        state = self.userbot_login_state.get(user_id)
-        
-        # Log entry to this function for debugging
-        logger.info(f"process_userbot_code called for user {user_id}. Active state: {state is not None}")
-        
-        if not state:
-            logger.warning(f"No active login state found for user {user_id}. Ignoring message.")
-            return False
-
-        code = message.text.strip()
-        if not code.isdigit() or len(code) != 5:
-            logger.info(f"Received non-5-digit code from {user_id}: {code}")
-            await message.reply("❌ Invalid format. Please send exactly 5 digits.")
-            return True
-
-        logger.info(f"Step 1: Code '{code}' received from user {user_id}. Starting verification...")
-        await message.reply("⏳ **Verifying code and generating session...**")
-        await self.log_to_debug(f"🔍 DEBUG: Starting sign_in for {user_id} with code {code}")
-        
-        try:
-            temp_client = state["client"]
-            logger.info(f"Step 2: Accessing temp_client for phone {state['phone']}. Hash: {state['phone_code_hash']}")
-            
-            # Add human-like delay and explicit connection check to avoid handshake timing issues
-            logger.info("Step 3: Waiting 3s for handshake stability...")
-            await asyncio.sleep(3)
-            
-            if not temp_client.is_connected:
-                logger.info("Step 4: temp_client was disconnected. Attempting reconnection...")
-                await temp_client.connect()
-                logger.info("Step 4a: temp_client reconnected.")
-            else:
-                logger.info("Step 4: temp_client is still connected.")
-
-            logger.info("Step 5: Calling temp_client.sign_in...")
-            await temp_client.sign_in(
-                phone_number=state["phone"],
-                phone_code_hash=state["phone_code_hash"],
-                phone_code=code
-            )
-            
-            logger.info("Step 6: Sign-in successful. Exporting session string...")
-            await self.log_to_debug("✅ DEBUG: sign_in successful. Exporting session...")
-            
-            session_string = await temp_client.export_session_string()
-            logger.info(f"Step 7: Session string exported (length: {len(session_string)})")
-            
-            # Save session to database
-            logger.info("Step 8: Saving session to database...")
-            async with self.db_pool.acquire() as conn:
-                res = await conn.execute(
-                    "INSERT INTO bot_settings (setting_key, setting_value) "
-                    "VALUES ('userbot_session_string', $1) "
-                    "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
-                    session_string
-                )
-                logger.info(f"Step 9: Database update result: {res}")
-            
-            await message.reply("✅ **Success!** Userbot session saved to database.\n\nThe userbot service will now pick up the new session.")
-            await self.log_to_debug("✅ New Userbot session generated and stored.")
-            
-            logger.info("Step 10: Disconnecting temp_client and cleaning up state.")
-            await temp_client.disconnect()
-            del self.userbot_login_state[user_id]
-            logger.info("Step 11: Cleanup complete. Login process finished.")
-            return True
-            
-        except Exception as e:
-            error_msg = str(e)
-            import traceback
-            logger.error(f"CRITICAL LOGIN FAILURE for {user_id}: {error_msg}")
-            logger.error(traceback.format_exc())
-            await message.reply(f"❌ Login failed: {error_msg}")
-            await self.log_to_debug(f"❌ DEBUG ERROR: sign_in failed for {user_id}. Error: {error_msg}")
-            
-            # Detailed error handling for common Telegram errors
-            if "PHONE_CODE_INVALID" in error_msg:
-                await self.log_to_debug("💡 TIP: The code you provided is incorrect. Please check the code in your Telegram app and try again.")
-            elif "PHONE_CODE_EXPIRED" in error_msg:
-                await self.log_to_debug("💡 TIP: The code has expired. Please run /login setup again to get a new code.")
-            elif "SESSION_PASSWORD_NEEDED" in error_msg:
-                await self.log_to_debug("⚠️ ALERT: Two-Step Verification is enabled on this account. Please turn it off temporarily.")
-
-            try:
-                await temp_client.disconnect()
-            except:
-                pass
-            del self.userbot_login_state[user_id]
-            return True
 
     async def handle_group_message(self, client: Client, message: Message):
         """Handle messages in groups"""
@@ -3921,19 +3602,20 @@ class TelegramTradingBot:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 
                 async with self.db_pool.acquire() as conn:
-                    # CREATE TABLE with correct schema if not exists
+                    # Ensure completed_trades table exists
                     await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS userbot_dm_queue (
+                        CREATE TABLE IF NOT EXISTS completed_trades (
                             id SERIAL PRIMARY KEY,
-                            user_id BIGINT NOT NULL,
-                            message_text TEXT NOT NULL,
-                            label TEXT NOT NULL,
-                            status TEXT DEFAULT 'pending',
-                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                            sent_at TIMESTAMP WITH TIME ZONE
+                            pair VARCHAR(20) NOT NULL,
+                            entry_price DECIMAL,
+                            exit_price DECIMAL,
+                            pips DECIMAL,
+                            result VARCHAR(20),
+                            closed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            message_id BIGINT
                         );
                     """)
-
+                    
                     # Fix 1: Ensure column exists with correct name (for existing DBs)
                     await conn.execute("""
                         DO $$ 
@@ -4845,24 +4527,6 @@ class TelegramTradingBot:
                     f"Failed to send breakeven notification without reply: {e2}"
                 )
 
-    async def handle_login_status(self, client, message: Message):
-        """Check the status of the Userbot service"""
-        if not self.db_pool:
-            await message.reply("❌ Database connection not available.")
-            return
-
-        try:
-            async with self.db_pool.acquire() as conn:
-                session = await conn.fetchval(
-                    "SELECT setting_value FROM bot_settings WHERE setting_key = 'userbot_session_string'"
-                )
-            
-            if not session:
-                await message.reply("🔴 **Userbot Status**: Disconnected (No session found).")
-            else:
-                await message.reply("🟢 **Userbot Status**: Connected (Session exists in database).")
-        except Exception as e:
-            await message.reply(f"❌ Error checking status: {str(e)}")
 
     async def log_to_debug(self, message: str, is_error: bool = False, user_id: Optional[int] = None, failed_message: Optional[str] = None):
         if DEBUG_GROUP_ID:
@@ -4894,11 +4558,8 @@ class TelegramTradingBot:
     async def init_database(self):
         try:
             database_url = os.getenv('DATABASE_URL')
-
             if not database_url:
-                logger.warning(
-                    "No database URL found - continuing without persistent memory"
-                )
+                logger.warning("No database URL found - continuing without persistent memory")
                 return
 
             import ssl
@@ -4915,7 +4576,8 @@ class TelegramTradingBot:
             logger.info("PostgreSQL connection pool created")
 
             async with self.db_pool.acquire() as conn:
-                await conn.execute('''
+                # Core VIP and Trial tables
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS role_history (
                         member_id BIGINT PRIMARY KEY,
                         first_granted TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -4923,9 +4585,8 @@ class TelegramTradingBot:
                         last_expired TIMESTAMP WITH TIME ZONE,
                         guild_id BIGINT NOT NULL
                     )
-                ''')
-
-                await conn.execute('''
+                """)
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS active_members (
                         member_id BIGINT PRIMARY KEY,
                         role_added_time TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -4933,19 +4594,18 @@ class TelegramTradingBot:
                         guild_id BIGINT NOT NULL,
                         weekend_delayed BOOLEAN DEFAULT FALSE,
                         expiry_time TIMESTAMP WITH TIME ZONE,
-                        custom_duration BOOLEAN DEFAULT FALSE
+                        custom_duration BOOLEAN DEFAULT FALSE,
+                        monday_notification_sent BOOLEAN DEFAULT FALSE
                     )
-                ''')
-
-                await conn.execute('''
+                """)
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS weekend_pending (
                         member_id BIGINT PRIMARY KEY,
                         join_time TIMESTAMP WITH TIME ZONE NOT NULL,
                         guild_id BIGINT NOT NULL
                     )
-                ''')
-
-                await conn.execute('''
+                """)
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS dm_schedule (
                         member_id BIGINT PRIMARY KEY,
                         role_expired TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -4954,25 +4614,22 @@ class TelegramTradingBot:
                         dm_7_sent BOOLEAN DEFAULT FALSE,
                         dm_14_sent BOOLEAN DEFAULT FALSE
                     )
-                ''')
-
-                await conn.execute('''
+                """)
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS bot_status (
                         id INTEGER PRIMARY KEY DEFAULT 1,
                         last_online TIMESTAMP WITH TIME ZONE,
                         heartbeat_time TIMESTAMP WITH TIME ZONE,
                         CONSTRAINT tg_single_row_constraint UNIQUE (id)
                     )
-                ''')
-
-                await conn.execute('''
+                """)
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS bot_settings (
                         setting_key VARCHAR(100) PRIMARY KEY,
                         setting_value TEXT NOT NULL
                     )
-                ''')
-
-                await conn.execute('''
+                """)
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS active_trades (
                         message_id VARCHAR(100) PRIMARY KEY,
                         channel_id BIGINT NOT NULL,
@@ -5002,7 +4659,7 @@ class TelegramTradingBot:
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                         last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
-                ''')
+                """)
 
                 try:
                     await conn.execute(
@@ -5053,7 +4710,7 @@ class TelegramTradingBot:
                 except Exception:
                     pass
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS completed_trades (
                         message_id VARCHAR(100) PRIMARY KEY,
                         channel_id BIGINT NOT NULL,
@@ -5081,9 +4738,9 @@ class TelegramTradingBot:
                         completed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                         completion_reason VARCHAR(50) NOT NULL
                     )
-                ''')
+                """)
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS missed_hits (
                         id SERIAL PRIMARY KEY,
                         message_id VARCHAR(20) NOT NULL,
@@ -5094,9 +4751,9 @@ class TelegramTradingBot:
                         processed BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
-                ''')
+                """)
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS emoji_reactions (
                         id SERIAL PRIMARY KEY,
                         user_id BIGINT NOT NULL,
@@ -5106,17 +4763,17 @@ class TelegramTradingBot:
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                         UNIQUE(user_id, message_id, emoji)
                     )
-                ''')
+                """)
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS free_group_joins (
                         user_id BIGINT PRIMARY KEY,
                         joined_at TIMESTAMP WITH TIME ZONE NOT NULL,
                         discount_sent BOOLEAN DEFAULT FALSE
                     )
-                ''')
+                """)
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS pending_welcome_dms (
                         user_id BIGINT PRIMARY KEY,
                         first_name VARCHAR(255) NOT NULL,
@@ -5126,27 +4783,27 @@ class TelegramTradingBot:
                         last_attempt TIMESTAMP WITH TIME ZONE,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
-                ''')
+                """)
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS vip_trial_activations (
                         user_id BIGINT PRIMARY KEY,
                         activation_date TIMESTAMP WITH TIME ZONE NOT NULL,
                         expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
-                ''')
+                """)
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS trial_offer_history (
                         user_id BIGINT PRIMARY KEY,
                         offer_sent_date TIMESTAMP WITH TIME ZONE NOT NULL,
                         accepted BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
-                ''')
+                """)
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS peer_id_checks (
                         user_id BIGINT PRIMARY KEY,
                         joined_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -5159,9 +4816,9 @@ class TelegramTradingBot:
                         welcome_dm_sent BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
-                ''')
+                """)
 
-                await conn.execute('''
+                await conn.execute("""
                     CREATE TABLE IF NOT EXISTS userbot_dm_queue (
                         id SERIAL PRIMARY KEY,
                         user_id BIGINT NOT NULL,
@@ -5170,18 +4827,170 @@ class TelegramTradingBot:
                         status VARCHAR(20) DEFAULT 'pending',
                         retry_count INTEGER DEFAULT 0,
                         last_attempt TIMESTAMP WITH TIME ZONE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        sent_at TIMESTAMP WITH TIME ZONE
                     )
-                ''')
+                """)
+
+                try:
+                    await conn.execute("ALTER TABLE userbot_dm_queue ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP WITH TIME ZONE")
+                except:
+                    pass
 
             logger.info("Database tables initialized")
-
             await self.load_config_from_db()
             await self.load_active_trades_from_db()
 
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
             self.db_pool = None
+
+    async def initialize_all_tables(self, conn):
+        """Ensures every single required table exists with the correct schema."""
+        try:
+            # 1. Userbot DM Queue
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS userbot_dm_queue (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    message_text TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    sent_at TIMESTAMP WITH TIME ZONE
+                );
+            """)
+
+            # 2. Completed Trades
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS completed_trades (
+                    id SERIAL PRIMARY KEY,
+                    pair VARCHAR(20) NOT NULL,
+                    entry_price DECIMAL,
+                    exit_price DECIMAL,
+                    pips DECIMAL,
+                    result VARCHAR(20),
+                    closed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    message_id BIGINT,
+                    completion_reason TEXT
+                );
+            """)
+
+            # 3. Active Trades
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS active_trades (
+                    message_id BIGINT PRIMARY KEY,
+                    pair VARCHAR(20) NOT NULL,
+                    entry_price DECIMAL NOT NULL,
+                    tp1 DECIMAL,
+                    tp2 DECIMAL,
+                    tp3 DECIMAL,
+                    sl DECIMAL,
+                    status VARCHAR(20) DEFAULT 'active',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+            # 4. VIP & Trial Management
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS role_history (
+                    member_id BIGINT PRIMARY KEY,
+                    first_granted TIMESTAMP WITH TIME ZONE,
+                    times_granted INTEGER DEFAULT 1,
+                    last_expired TIMESTAMP WITH TIME ZONE
+                );
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS active_members (
+                    member_id BIGINT PRIMARY KEY,
+                    role_added_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                    role_id BIGINT NOT NULL,
+                    guild_id BIGINT NOT NULL,
+                    weekend_delayed BOOLEAN DEFAULT FALSE,
+                    expiry_time TIMESTAMP WITH TIME ZONE,
+                    custom_duration BOOLEAN DEFAULT FALSE,
+                    monday_notification_sent BOOLEAN DEFAULT FALSE
+                )
+            """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS peer_id_checks (
+                    user_id BIGINT PRIMARY KEY,
+                    joined_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    peer_id_established BOOLEAN DEFAULT FALSE,
+                    established_at TIMESTAMP WITH TIME ZONE,
+                    current_delay_minutes INT DEFAULT 30,
+                    current_interval_minutes INT DEFAULT 3,
+                    last_check_at TIMESTAMP WITH TIME ZONE,
+                    next_check_at TIMESTAMP WITH TIME ZONE,
+                    welcome_dm_sent BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    last_daily_offer_at TIMESTAMP WITH TIME ZONE
+                )
+            """)
+
+            logger.info("Database tables initialized successfully")
+        except Exception as e:
+            logger.error(f"Error in initialize_all_tables: {e}")
+            raise
+
+    async def initialize_additional_tables(self, conn):
+        """Ensures any other required tables exist."""
+        try:
+            # 5. Bot Settings
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    setting_key VARCHAR(100) PRIMARY KEY,
+                    setting_value TEXT NOT NULL
+                );
+            """)
+            
+            # 6. DM Schedule
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS dm_schedule (
+                    member_id BIGINT PRIMARY KEY,
+                    role_expired TIMESTAMP WITH TIME ZONE NOT NULL,
+                    guild_id BIGINT NOT NULL,
+                    dm_3_sent BOOLEAN DEFAULT FALSE,
+                    dm_7_sent BOOLEAN DEFAULT FALSE,
+                    dm_14_sent BOOLEAN DEFAULT FALSE
+                );
+            """)
+
+            # 7. Bot Status
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bot_status (
+                    status_key TEXT PRIMARY KEY,
+                    status_value TEXT NOT NULL
+                );
+            """)
+
+            # 8. Engagement & Discovery
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS free_group_joins (
+                    user_id BIGINT PRIMARY KEY,
+                    joined_at TIMESTAMP WITH TIME ZONE,
+                    discount_sent BOOLEAN DEFAULT FALSE
+                );
+            """)
+
+            # 9. Safety Migrations
+            await conn.execute("""
+                DO $$ 
+                BEGIN 
+                    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='message') THEN
+                        ALTER TABLE userbot_dm_queue RENAME COLUMN message TO message_text;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='sent_at') THEN
+                        ALTER TABLE userbot_dm_queue ADD COLUMN sent_at TIMESTAMP WITH TIME ZONE;
+                    END IF;
+                END $$;
+            """)
+
+            logger.info("Additional database tables initialized successfully")
+        except Exception as e:
+            logger.error(f"Error in initialize_additional_tables: {e}")
+            raise
 
     async def load_config_from_db(self):
         if not self.db_pool:
@@ -6392,9 +6201,7 @@ class TelegramTradingBot:
                     BotCommand("activetrades", "View active trading signals"),
                     BotCommand("tradeoverride", "Override trade status (menu)"),
                     BotCommand("memberdatabase", "Toggle member tracking for deals"),
-                    BotCommand("setsession", "Update Userbot session manually"),
                     BotCommand("pricetest", "Test live price for a pair"),
-                    BotCommand("login", "Userbot login/setup (setup|status)"),
                     BotCommand("newmemberslist", "Track new members and trial status"),
                     BotCommand("dmmessages", "Preview DM message templates"),
                     BotCommand("peeridstatus", "Check if peer ID is connected for a user"),
