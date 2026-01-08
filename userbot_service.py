@@ -531,293 +531,189 @@ class UserbotService:
 
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
-                async with self.db_pool.acquire() as conn:
-                    # 1. Daily 9AM Trial Offer for members who haven't accepted yet
-                    if current_time.hour >= 8 and current_time.hour < 12:
-                        # Check if we already processed this window today
-                        last_global_offer = await conn.fetchval(
-                            "SELECT setting_value FROM bot_settings WHERE setting_key = 'last_9am_offer_run'"
-                        )
-                        today_str = current_time.strftime('%Y-%m-%d')
-
-                        if last_global_offer != today_str:
-                            # Ensure columns exist
-                            await conn.execute(
-                                "ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS last_daily_offer_at TIMESTAMP WITH TIME ZONE"
+                # 1. Daily 9AM Trial Offer
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        if 8 <= current_time.hour < 12:
+                            last_global_offer = await conn.fetchval(
+                                "SELECT setting_value FROM bot_settings WHERE setting_key = 'last_9am_offer_run'"
                             )
-                            await conn.execute(
-                                "ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS ever_in_vip BOOLEAN DEFAULT FALSE"
-                            )
-                            await conn.execute(
-                                "ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS daily_offer_count INTEGER DEFAULT 0"
-                            )
+                            today_str = current_time.strftime('%Y-%m-%d')
 
-                            # Find users who:
-                            # 1. Received the welcome DM (welcome_dm_sent = TRUE)
-                            # 2. Aren't currently in active_members
-                            # 3. Have never been in VIP (ever_in_vip = FALSE)
-                            # 4. Haven't reached the 3-cycle limit (daily_offer_count < 3)
-                            # 5. Haven't received the daily offer in the last 2 days
-                            pending_trial_users = await conn.fetch(
-                                """
-                                SELECT p.user_id 
-                                FROM peer_id_checks p
-                                LEFT JOIN active_members a ON p.user_id = a.member_id
-                                WHERE p.welcome_dm_sent = TRUE
-                                AND a.member_id IS NULL 
-                                AND p.ever_in_vip = FALSE
-                                AND p.daily_offer_count < 3
-                                AND p.peer_id_established = TRUE
-                                AND (p.last_daily_offer_at IS NULL OR p.last_daily_offer_at < $1)
-                            """, current_time - timedelta(days=2))
+                            if last_global_offer != today_str:
+                                await conn.execute("ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS last_daily_offer_at TIMESTAMP WITH TIME ZONE")
+                                await conn.execute("ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS ever_in_vip BOOLEAN DEFAULT FALSE")
+                                await conn.execute("ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS daily_offer_count INTEGER DEFAULT 0")
 
-                            for row in pending_trial_users:
-                                user_id = row['user_id']
+                                pending_trial_users = await conn.fetch("""
+                                    SELECT p.user_id 
+                                    FROM peer_id_checks p
+                                    LEFT JOIN active_members a ON p.user_id = a.member_id
+                                    WHERE p.welcome_dm_sent = TRUE
+                                    AND a.member_id IS NULL 
+                                    AND p.ever_in_vip = FALSE
+                                    AND p.daily_offer_count < 3
+                                    AND p.peer_id_established = TRUE
+                                    AND (p.last_daily_offer_at IS NULL OR p.last_daily_offer_at < $1)
+                                """, current_time - timedelta(days=2))
 
-                                # Double check if they aren't already queued for the same offer recently
-                                exists = await conn.fetchval(
-                                    "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Daily Trial Offer' AND created_at > $2",
-                                    user_id,
-                                    current_time - timedelta(hours=23))
+                                for row in pending_trial_users:
+                                    user_id = row['user_id']
+                                    exists = await conn.fetchval(
+                                        "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Daily Trial Offer' AND created_at > $2",
+                                        user_id, current_time - timedelta(hours=23))
+                                    if not exists:
+                                        msg = "Want to try our VIP Group for FREE?\n\nWe're offering a 3-day free trial (excluding the weekend) of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\nYour free trial will automatically be activated once you join our VIP group through this link: https://t.me/+5X18tTjgM042ODU0"
+                                        start_time = max(current_time, current_time.replace(hour=8, minute=0, second=0))
+                                        end_time = current_time.replace(hour=12, minute=0, second=0)
+                                        
+                                        if end_time > start_time + timedelta(minutes=30):
+                                            total_seconds = (end_time - start_time).total_seconds()
+                                            scheduled_time = start_time + timedelta(seconds=random.randint(0, int(total_seconds)))
+                                        else:
+                                            scheduled_time = current_time
+
+                                        await conn.execute("""
+                                            INSERT INTO userbot_dm_queue 
+                                            (user_id, message_text, label, status, created_at) 
+                                            VALUES ($1, $2, 'Daily Trial Offer', 'pending', $3)
+                                        """, user_id, msg, scheduled_time)
+
+                                        await conn.execute("""
+                                            UPDATE peer_id_checks 
+                                            SET last_daily_offer_at = $1, 
+                                                daily_offer_count = daily_offer_count + 1 
+                                            WHERE user_id = $2
+                                        """, current_time, user_id)
+                                        await self.log_to_debug(f"📅 Scheduled Daily Trial Offer for {user_id} at {scheduled_time.strftime('%H:%M')}")
+
+                                await conn.execute("INSERT INTO bot_settings (setting_key, setting_value) VALUES ('last_9am_offer_run', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", today_str)
+                except Exception as e:
+                    logger.error(f"Error in Daily Offer block: {e}")
+
+                # 2. Handle Trial Expiry Warnings (Queueing only)
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        active_members = await conn.fetch("SELECT member_id, expiry_time FROM active_members")
+                        for member in active_members:
+                            member_id = member['member_id']
+                            expiry_time = member['expiry_time']
+                            if expiry_time.tzinfo is None:
+                                expiry_time = AMSTERDAM_TZ.localize(expiry_time)
+
+                            time_left = expiry_time - current_time
+                            
+                            # 24h Warning
+                            if timedelta(hours=23) <= time_left <= timedelta(hours=25):
+                                exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '24h_warning' AND created_at > $2",
+                                                           member_id, current_time - timedelta(hours=24))
                                 if not exists:
-                                    msg = "Want to try our VIP Group for FREE?\n\nWe're offering a 3-day free trial (excluding the weekend) of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\nYour free trial will automatically be activated once you join our VIP group through this link: https://t.me/+5X18tTjgM042ODU0"
+                                    msg = "⏰ **REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in 24 hours**.\n\nAfter that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
+                                    await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '24h_warning', 'pending')", member_id, msg)
 
-                                    # Calculate a random scheduled time between current_time (08:00+) and 12:00
-                                    # If it's after 8am already, we use current_time as base
-                                    start_time = max(
-                                        current_time,
-                                        current_time.replace(hour=8,
-                                                             minute=0,
-                                                             second=0))
-                                    end_time = current_time.replace(hour=12,
-                                                                    minute=0,
-                                                                    second=0)
+                            # 3h Warning
+                            if timedelta(hours=2) <= time_left <= timedelta(hours=4):
+                                exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '3h_warning' AND created_at > $2",
+                                                           member_id, current_time - timedelta(hours=24))
+                                if not exists:
+                                    msg = "⏰ **FINAL REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and get permanent access to our VIP Group.\n\n**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
+                                    await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '3h_warning', 'pending')", member_id, msg)
 
-                                    # Ensure we have a valid range (at least 30 mins)
-                                    if end_time > start_time + timedelta(
-                                            minutes=30):
-                                        total_seconds = (
-                                            end_time -
-                                            start_time).total_seconds()
-                                        random_seconds = random.randint(
-                                            0, int(total_seconds))
-                                        scheduled_time = start_time + timedelta(
-                                            seconds=random_seconds)
-                                    else:
-                                        scheduled_time = current_time
+                        # Handle Trial Expiration queueing
+                        expired = await conn.fetch("SELECT member_id FROM active_members WHERE expiry_time <= $1", current_time)
+                        for member in expired:
+                            member_id = member['member_id']
+                            exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Expired' AND created_at > $2",
+                                                       member_id, current_time - timedelta(hours=1))
+                            if not exists:
+                                msg = "Hey! Your **3-day free trial (excluding the weekend)** to the VIP Group has unfortunately **ran out**. We truly hope you were able to benefit with us & we hope to see you back soon! For now, feel free to continue following our trade signals in our Free Group: https://t.me/fxpippioneers\n\n**Want to rejoin the VIP Group? You can regain access through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+                                await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, 'Trial Expired', 'pending')", member_id, msg)
+                except Exception as e:
+                    logger.error(f"Error in Expiry Warning block: {e}")
 
-                                    # Queue DM with scheduled_at
-                                    await conn.execute(
-                                        """
-                                        INSERT INTO userbot_dm_queue 
-                                        (user_id, message_text, label, status, created_at) 
-                                        VALUES ($1, $2, 'Daily Trial Offer', 'pending', $3)
-                                    """, user_id, msg, scheduled_time)
+                # 3. Handle Retention Follow-ups (Direct Sending - using short connections)
+                try:
+                    followups = []
+                    async with self.db_pool.acquire() as conn:
+                        followups = await conn.fetch("SELECT member_id, role_expired, dm_3_sent, dm_7_sent, dm_14_sent FROM dm_schedule")
+                    
+                    for f in followups:
+                        m_id = f['member_id']
+                        expired_at = f['role_expired']
+                        if expired_at.tzinfo is None: expired_at = AMSTERDAM_TZ.localize(expired_at)
+                        days_since = (current_time - expired_at).days
 
-                                    # Update count and last_daily_offer_at
-                                    await conn.execute(
-                                        """
-                                        UPDATE peer_id_checks 
-                                        SET last_daily_offer_at = $1, 
-                                            daily_offer_count = daily_offer_count + 1 
-                                        WHERE user_id = $2
-                                    """, current_time, user_id)
-                                    await self.log_to_debug(
-                                        f"📅 Scheduled Daily Trial Offer for {user_id} at {scheduled_time.strftime('%H:%M')} (Attempt {row.get('daily_offer_count', 0)+1}/3)"
-                                    )
+                        for days, flag in [(3, 'dm_3_sent'), (7, 'dm_7_sent'), (14, 'dm_14_sent')]:
+                            if days_since >= days and not f[flag]:
+                                msg_templates = {
+                                    3: "Hey! It's been 3 days since your **3-day free trial (excluding the weekend)** ended. We truly hope you got value from the **20+ trading signals** you received during that time.\n\nAs you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\nWe'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/",
+                                    7: "It's been a week since your **3-day free trial (excluding the weekend)** ended. Since then, our **VIP members have been catching trade setups daily in the VIP Group**.\n\nIf you found value in just 3 days, imagine what results you could've been seeing by now with full access. It's all about **consistency and staying connected to the right information**.\n\nWe'd like to **personally invite you to rejoin the VIP Group** and get back into the rhythm.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/",
+                                    14: "Hey! It's been two weeks since your **3-day free trial (excluding the weekend)** ended. We hope you've stayed active since then.\n\nIf you've been trading solo or passively following the free channel, you might be feeling the difference. In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. That edge can make all the difference over time.\n\nWe'd love to **invite you back into the VIP Group** and help you start compounding results again.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+                                }
+                                success = await self.send_dm(m_id, msg_templates[days], f"{days}-Day Follow-up")
+                                if success:
+                                    async with self.db_pool.acquire() as conn:
+                                        await conn.execute(f"UPDATE dm_schedule SET {flag} = TRUE WHERE member_id = $1", m_id)
+                except Exception as e:
+                    logger.error(f"Error in Retention Follow-up block: {e}")
 
-                            # Mark this day as run
-                            await conn.execute(
-                                "INSERT INTO bot_settings (setting_key, setting_value) VALUES ('last_9am_offer_run', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
-                                today_str)
+                # 4. Handle Engagement Tracking
+                try:
+                    joins = []
+                    async with self.db_pool.acquire() as conn:
+                        joins = await conn.fetch('SELECT user_id, joined_at FROM free_group_joins WHERE discount_sent = FALSE')
+                    
+                    for j in joins:
+                        if current_time >= j['joined_at'] + timedelta(days=30):
+                            async with self.db_pool.acquire() as conn:
+                                reaction_count = await conn.fetchval('SELECT COUNT(DISTINCT message_id) FROM emoji_reactions WHERE user_id = $1 AND reaction_time > $2',
+                                                                   j['user_id'], j['joined_at'])
+                            if reaction_count >= 5:
+                                msg = "Hey! 👋 We noticed that you've been engaging with our signals in the Free Group. We want to say that we truly appreciate it!\n\nAs a form of appreciation for your loyalty and engagement, we want to give you something special: **an exclusive 50% discount for access to our VIP Group.**\n\n**Your exclusive discount code is:** `Thank_You!50!`\n\n**You can upgrade to VIP and apply your discount code here:** https://whop.com/gold-pioneer/gold-pioneer/"
+                                if await self.send_dm(j['user_id'], msg, "Engagement Discount"):
+                                    async with self.db_pool.acquire() as conn:
+                                        await conn.execute('UPDATE free_group_joins SET discount_sent = TRUE WHERE user_id = $1', j['user_id'])
+                except Exception as e:
+                    logger.error(f"Error in Engagement Tracking block: {e}")
 
-                    # 2. Handle Trial Expiry Warnings (24h and 3h)
-                    active_members = await conn.fetch(
-                        "SELECT member_id, expiry_time FROM active_members")
-                    for member in active_members:
-                        member_id = member['member_id']
-                        expiry_time = member['expiry_time']
-                        if expiry_time.tzinfo is None:
-                            expiry_time = AMSTERDAM_TZ.localize(expiry_time)
-
-                        time_left = expiry_time - current_time
-                        hours_left = time_left.total_seconds() / 3600
-
-                        # 24h Warning
-                        if timedelta(hours=23) <= time_left <= timedelta(
-                                hours=25):
-                            sent_check = await conn.fetchval(
-                                "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '24h_warning' AND created_at > $2",
-                                member_id, current_time - timedelta(hours=24))
-                            if not sent_check:
-                                msg = (
-                                    "⏰ **REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in 24 hours**.\n\n"
-                                    "After that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
-                                )
-                                await conn.execute(
-                                    "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '24h_warning', 'pending')",
-                                    member_id, msg)
-
-                        # 3h Warning
-                        if timedelta(hours=2) <= time_left <= timedelta(
-                                hours=4):
-                            sent_check = await conn.fetchval(
-                                "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '3h_warning' AND created_at > $2",
-                                member_id, current_time - timedelta(hours=24))
-                            if not sent_check:
-                                msg = (
-                                    "⏰ **FINAL REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in just 3 hours**.\n\n"
-                                    "You're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and get permanent access to our VIP Group.\n\n"
-                                    "**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
-                                )
-                                await conn.execute(
-                                    "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '3h_warning', 'pending')",
-                                    member_id, msg)
-
-                # 2.1 Handle Trial Expiration (Userbot handles the DM)
-                expired_members = await conn.fetch(
-                    """
-                    SELECT member_id FROM active_members 
-                    WHERE expiry_time <= $1
-                """, current_time)
-                for member in expired_members:
-                    member_id = member['member_id']
-                    sent_check = await conn.fetchval(
-                        "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Expired' AND created_at > $2",
-                        member_id, current_time - timedelta(hours=1))
-                    if not sent_check:
-                        msg = (
-                            "Hey! Your **3-day free trial (excluding the weekend)** to the VIP Group has unfortunately **ran out**. We truly hope you were able to benefit with us & we hope to see you back soon! For now, feel free to continue following our trade signals in our Free Group: https://t.me/fxpippioneers\n\n"
-                            "**Want to rejoin the VIP Group? You can regain access through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-                        )
-                        await conn.execute(
-                            "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, 'Trial Expired', 'pending')",
-                            member_id, msg)
-
-                # 3. Handle Retention Follow-ups (3, 7, 14 days)
-                followups = await conn.fetch(
-                    "SELECT member_id, role_expired, dm_3_sent, dm_7_sent, dm_14_sent FROM dm_schedule"
-                )
-                for f in followups:
-                    m_id = f['member_id']
-                    expired_at = f['role_expired']
-                    if expired_at.tzinfo is None:
-                        expired_at = AMSTERDAM_TZ.localize(expired_at)
-
-                    days_since = (current_time - expired_at).days
-
-                    # 3-Day Follow-up
-                    if days_since >= 3 and not f['dm_3_sent']:
-                        msg = (
-                            "Hey! It's been 3 days since your **3-day free trial (excluding the weekend)** ended. We truly hope you got value from the **20+ trading signals** you received during that time.\n\n"
-                            "As you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\n"
-                            "We'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n"
-                            "**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-                        )
-                        if await self.send_dm(m_id, msg, "3-Day Follow-up"):
-                            await conn.execute(
-                                "UPDATE dm_schedule SET dm_3_sent = TRUE WHERE member_id = $1",
-                                m_id)
-
-                    # 7-Day Follow-up
-                    if days_since >= 7 and not f['dm_7_sent']:
-                        msg = (
-                            "It's been a week since your **3-day free trial (excluding the weekend)** ended. Since then, our **VIP members have been catching trade setups daily in the VIP Group**.\n\n"
-                            "If you found value in just 3 days, imagine what results you could've been seeing by now with full access. It's all about **consistency and staying connected to the right information**.\n\n"
-                            "We'd like to **personally invite you to rejoin the VIP Group** and get back into the rhythm.\n\n"
-                            "**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-                        )
-                        if await self.send_dm(m_id, msg, "7-Day Follow-up"):
-                            await conn.execute(
-                                "UPDATE dm_schedule SET dm_7_sent = TRUE WHERE member_id = $1",
-                                m_id)
-
-                    # 14-Day Follow-up
-                    if days_since >= 14 and not f['dm_14_sent']:
-                        msg = (
-                            "Hey! It's been two weeks since your **3-day free trial (excluding the weekend)** ended. We hope you've stayed active since then.\n\n"
-                            "If you've been trading solo or passively following the free channel, you might be feeling the difference. In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. That edge can make all the difference over time.\n\n"
-                            "We'd love to **invite you back into the VIP Group** and help you start compounding results again.\n\n"
-                            "**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-                        )
-                        if await self.send_dm(m_id, msg, "14-Day Follow-up"):
-                            await conn.execute(
-                                "UPDATE dm_schedule SET dm_14_sent = TRUE WHERE member_id = $1",
-                                m_id)
-
-                # 4. Handle Engagement Tracking (5+ reactions after 30 days)
-                joins = await conn.fetch(
-                    'SELECT user_id, joined_at, discount_sent FROM free_group_joins WHERE discount_sent = FALSE'
-                )
-                for j in joins:
-                    thirty_days_after = j['joined_at'] + timedelta(days=30)
-                    if current_time >= thirty_days_after:
-                        reaction_count = await conn.fetchval(
-                            'SELECT COUNT(DISTINCT message_id) FROM emoji_reactions WHERE user_id = $1 AND reaction_time > $2',
-                            j['user_id'], j['joined_at'])
-                        if reaction_count >= 5:
-                            msg = (
-                                "Hey! 👋 We noticed that you've been engaging with our signals in the Free Group. We want to say that we truly appreciate it!\n\n"
-                                "As a form of appreciation for your loyalty and engagement, we want to give you something special: **an exclusive 50% discount for access to our VIP Group.**\n\n"
-                                "Here's what you'll unlock:\n"
-                                "• **36+ expert signals per week** (vs 6 per week in the free group)\n"
-                                "• **6+ trade signals PER DAY** from our professional trading team\n"
-                                "• Real-time price tracking and risk management\n\n"
-                                "**Your exclusive discount code is:** `Thank_You!50!`\n\n"
-                                "**You can upgrade to VIP and apply your discount code here:** https://whop.com/gold-pioneer/gold-pioneer/"
-                            )
-                            if await self.send_dm(j['user_id'], msg,
-                                                  "Engagement Discount"):
-                                await conn.execute(
-                                    'UPDATE free_group_joins SET discount_sent = TRUE WHERE user_id = $1',
-                                    j['user_id'])
-
-                    # 5. Handle Monday Activations
+                # 5. Handle Monday Activations
+                try:
                     if current_time.weekday() == 0 and current_time.hour <= 1:
-                        delayed = await conn.fetch(
-                            "SELECT member_id FROM active_members WHERE weekend_delayed = TRUE AND NOT monday_notification_sent"
-                        )
+                        delayed = []
+                        async with self.db_pool.acquire() as conn:
+                            delayed = await conn.fetch("SELECT member_id FROM active_members WHERE weekend_delayed = TRUE AND NOT monday_notification_sent")
                         for d in delayed:
                             msg = "Hey! The weekend is over, so the trading markets have been opened again. That means your **3-day free trial (excluding the weekend)** has officially started."
-                            if await self.send_dm(d['member_id'], msg,
-                                                  "Monday Activation"):
-                                await conn.execute(
-                                    "UPDATE active_members SET monday_notification_sent = TRUE WHERE member_id = $1",
-                                    d['member_id'])
+                            if await self.send_dm(d['member_id'], msg, "Monday Activation"):
+                                async with self.db_pool.acquire() as conn:
+                                    await conn.execute("UPDATE active_members SET monday_notification_sent = TRUE WHERE member_id = $1", d['member_id'])
+                except Exception as e:
+                    logger.error(f"Error in Monday Activation block: {e}")
 
-                    # 6. Check for queued DMs from main bot
-                    queued_dms = await conn.fetch("""
-                        SELECT id, user_id, message_text, label, created_at FROM userbot_dm_queue 
-                        WHERE status = 'pending'
-                        ORDER BY created_at ASC LIMIT 10
-                    """)
+                # 6. Process Queued DMs
+                try:
+                    queued_dms = []
+                    async with self.db_pool.acquire() as conn:
+                        queued_dms = await conn.fetch("SELECT id, user_id, message_text, label, created_at FROM userbot_dm_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 10")
+                    
                     for row in queued_dms:
-                        # 10 minute delay specifically for Welcome DMs
                         if row['label'] == 'Welcome DM':
                             join_time = row['created_at']
-                            if join_time.tzinfo is None:
-                                join_time = AMSTERDAM_TZ.localize(join_time)
+                            if join_time.tzinfo is None: join_time = AMSTERDAM_TZ.localize(join_time)
+                            if current_time < join_time + timedelta(minutes=10): continue
 
-                            if current_time < join_time + timedelta(
-                                    minutes=10):
-                                continue  # Wait until 10 mins have passed
-
-                        if await self.send_dm(row['user_id'],
-                                              row['message_text'],
-                                              row['label']):
-                            await conn.execute(
-                                "UPDATE userbot_dm_queue SET status = 'sent', sent_at = $1 WHERE id = $2",
-                                current_time, row['id'])
-                        else:
-                            await conn.execute(
-                                "UPDATE userbot_dm_queue SET status = 'failed' WHERE id = $2",
-                                row['id'])
+                        success = await self.send_dm(row['user_id'], row['message_text'], row['label'])
+                        async with self.db_pool.acquire() as conn:
+                            if success:
+                                await conn.execute("UPDATE userbot_dm_queue SET status = 'sent', sent_at = $1 WHERE id = $2", current_time, row['id'])
+                            else:
+                                await conn.execute("UPDATE userbot_dm_queue SET status = 'failed' WHERE id = $2", row['id'])
+                except Exception as e:
+                    logger.error(f"Error in Queue processing block: {e}")
 
                 await asyncio.sleep(60)
             except Exception as e:
-                error_msg = f"❌ Error in DM loop: {e}"
-                logger.error(error_msg)
-                await self.log_to_debug(error_msg)
+                logger.error(f"❌ Critical Error in DM loop: {e}")
                 await asyncio.sleep(30)
 
 
