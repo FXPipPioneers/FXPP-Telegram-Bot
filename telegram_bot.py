@@ -565,11 +565,6 @@ class TelegramTradingBot:
                 return
             await self.handle_member_db_callback(client, callback_query)
 
-                await self.handle_login_status(client, callback_query.message)
-            elif action == "setup":
-                await callback_query.answer()
-                await self.handle_login_setup(client, callback_query.message)
-
         @self.app.on_message(filters.private, group=-1)
         async def handle_private_message(client, message: Message):
             if not message.from_user:
