@@ -332,8 +332,8 @@ class UserbotService:
                     
                     # Auto-reply message
                     auto_reply_text = (
-                        "Hey! This is an automated trading account and I can't respond to messages here.\n\n"
-                        f"If you have any questions, please feel free to message my owner directly: [Owner](tg://user?id={BOT_OWNER_USER_ID})"
+                        "This is a private trading bot that can only be used by members of the FX Pip Pioneers team. \n\n"
+                        "If you need support or have questions, please contact @fx_pippioneers."
                     )
                     
                     try:

@@ -581,6 +581,10 @@ class TelegramTradingBot:
             is_owner = await self.is_owner(user_id)
             
             if not is_owner:
+                await message.reply(
+                    "This is a private trading bot that can only be used by members of the FX Pip Pioneers team. \n\n"
+                    "If you need support or have questions, please contact @fx_pippioneers."
+                )
                 return
 
             # RE-ADD TARGETED LOGGING FOR OWNER MESSAGES
@@ -4196,12 +4200,19 @@ class TelegramTradingBot:
 
         trade['tp_hits'] = trade.get('tp_hits', []) + [tp_level]
 
-        await self.send_tp_notification(message_id, trade, tp_level, hit_price)
+        # Use create_task for non-blocking notification
+        asyncio.create_task(self.send_tp_notification(message_id, trade, tp_level, hit_price))
 
         if tp_level == 'TP2' and not trade.get('breakeven_active'):
             trade['breakeven_active'] = True
 
         if tp_level == 'TP3':
+            # ARCHIVE FIRST before deleting from memory
+            try:
+                await self.archive_trade_to_completed(message_id, trade, "TP3 Hit")
+            except Exception as e:
+                logger.error(f"Failed to archive TP3 hit for {message_id}: {e}")
+            
             trade['status'] = 'completed'
             del PRICE_TRACKING_CONFIG['active_trades'][message_id]
             await self.remove_trade_from_db(message_id, 'tp3_hit')
@@ -4218,11 +4229,19 @@ class TelegramTradingBot:
         if not trade:
             return
 
+        # ARCHIVE FIRST before deleting from memory
+        try:
+            await self.archive_trade_to_completed(message_id, trade, "SL Hit")
+        except Exception as e:
+            logger.error(f"Failed to archive SL hit for {message_id}: {e}")
+
         trade['status'] = 'sl_hit'
 
-        await self.send_sl_notification(message_id, trade, hit_price)
+        # Use create_task for non-blocking notification
+        asyncio.create_task(self.send_sl_notification(message_id, trade, hit_price))
 
-        del PRICE_TRACKING_CONFIG['active_trades'][message_id]
+        if message_id in PRICE_TRACKING_CONFIG['active_trades']:
+            del PRICE_TRACKING_CONFIG['active_trades'][message_id]
         await self.remove_trade_from_db(message_id, 'sl_hit')
 
         await self.log_to_debug(
@@ -4232,6 +4251,12 @@ class TelegramTradingBot:
         trade = PRICE_TRACKING_CONFIG['active_trades'].get(message_id)
         if not trade:
             return
+
+        # ARCHIVE FIRST before deleting from memory
+        try:
+            await self.archive_trade_to_completed(message_id, trade, "Breakeven Hit")
+        except Exception as e:
+            logger.error(f"Failed to archive Breakeven hit for {message_id}: {e}")
 
         trade['status'] = 'breakeven'
 
@@ -4271,7 +4296,10 @@ class TelegramTradingBot:
                     )
 
         del PRICE_TRACKING_CONFIG['active_trades'][message_id]
-        await self.remove_trade_from_db(message_id, 'breakeven_hit')
+        try:
+            await self.remove_trade_from_db(message_id, 'breakeven_hit')
+        except Exception as e:
+            logger.error(f"Error removing breakeven trade from DB: {e}")
 
         await self.log_to_debug(
             f"{trade['pair']} {trade['action']} hit breakeven @ {trade['entry_price']:.5f}"
