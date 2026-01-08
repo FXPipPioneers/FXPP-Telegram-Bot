@@ -345,11 +345,15 @@ MESSAGE_TEMPLATES = {
     "Welcome & Onboarding": {
         "Welcome DM (New Free Group Member)": {
             "id": "welcome_free",
-            "message": "**Hey, Welcome to FX Pip Pioneers!**\n\n**Want to try our VIP Group for FREE?**\nWe're offering a **3-day free trial** of our VIP Group where you'll receive **6+ high-quality trade signals per day**.\n\n**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0\n\nGood luck trading!"
+            "message": "Hey {user_name}!\n\n**Want to try our VIP Group for FREE?**\nWe're offering a **3-day free trial (excluding the weekend)** of our VIP Group where you'll receive **6+ high-quality trade signals per day**.\n\n**Your free trial will automatically be activated once you join our VIP group through this link:** https://t.me/+5X18tTjgM042ODU0"
         },
         "Monday Activation (Weekend Delay)": {
             "id": "monday_activation",
             "message": "Hey! The weekend is over, so the trading markets have been opened again. That means your 3-day welcome gift has officially started. You now have full access to the VIP Group. Let's make the most of it by securing some wins together!"
+        },
+        "Trial Started (Active)": {
+            "id": "trial_started",
+            "message": "Hey {user_name}!\n\nYour **3-day free trial (excluding the weekend)** for our VIP Group has officially **started**. You now have full access to all our high-quality signals.\n\nYour trial will end in **{hours} hours** from now.\n\nLet's secure some wins! 🚀"
         }
     },
     "Engagement & Offers": {
@@ -359,7 +363,7 @@ MESSAGE_TEMPLATES = {
         },
         "Daily VIP Trial Offer": {
             "id": "daily_trial_offer",
-            "message": "Want to try our VIP Group for FREE?\n\nWe're offering a 3-day free trial of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\nYour free trial will automatically be activated once you join our VIP group through this link: https://t.me/+5X18tTjgM042ODU0"
+            "message": "Want to try our VIP Group for FREE?\n\nWe're offering a **3-day free trial (excluding the weekend)** of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\nYour free trial will automatically be activated once you join our VIP group through this link: https://t.me/+5X18tTjgM042ODU0"
         }
     }
 }
@@ -590,22 +594,13 @@ class TelegramTradingBot:
             # Handle pair input for /entry
             if user_id in self.awaiting_custom_pair:
                 pair = message.text.upper().strip()
-                awaiting_data = self.awaiting_custom_pair.pop(user_id)
-
-                if isinstance(awaiting_data, dict) and awaiting_data.get('type') == 'pricetest':
-                    await message.reply(f"Fetching live price for **{pair}**...")
-                    price = await self.get_live_price(pair)
-                    if price:
-                        pair_name = PAIR_CONFIG.get(pair, {}).get('name', pair)
-                        decimals = PAIR_CONFIG.get(pair, {}).get('decimals', 5)
-                        await message.reply(f"**Price Test: {pair_name}**\n\nLive Price: **{price:.{decimals}f}**")
-                    else:
-                        await message.reply(f"Could not retrieve price for **{pair}**. The pair may not be supported or APIs are unavailable.")
-                    return
+                # Use pop to clear state
+                self.awaiting_custom_pair.pop(user_id, None)
 
                 if user_id in PENDING_ENTRIES:
                     entry_data = PENDING_ENTRIES[user_id]
                     entry_data['pair'] = pair
+                    # Set the state for Step 4
                     self.awaiting_price_input[user_id] = True
                     await message.reply(f"Pair set to **{pair}**.\n\nStep 4: Type the entry price (the price on your chart right now):")
                     return
@@ -986,9 +981,13 @@ class TelegramTradingBot:
                          current_date.day, 22, 59, 0))
             return expiry_time
 
-        # For other weekdays, count exactly 3 trading days AFTER the join date
+        # For other weekdays, count exactly 3 trading days INCLUDING the join date if early enough
+        # or starting from the next trading day if after market hours.
+        # However, to keep it simple and consistent with your rule:
+        # Friday (1), Monday (2), Tuesday (3)
+        
         trading_days_counted = 0
-        current_date = join_time.date() + timedelta(days=1)  # Start from the day after join
+        current_date = join_time.date()
 
         while True:
             day_weekday = current_date.weekday()
@@ -3775,6 +3774,24 @@ class TelegramTradingBot:
 
         # Determine if joined during weekend for tracking
         is_weekend = self.is_weekend_time(current_time)
+
+        # Queue Trial Started DM if not weekend
+        if not is_weekend:
+            # Calculate dynamic hours based on trading days
+            # expiry_time is already calculated to skip weekends
+            time_diff = expiry_time - current_time
+            total_hours = int(time_diff.total_seconds() / 3600)
+            
+            trial_started_msg = MESSAGE_TEMPLATES["Welcome & Onboarding"]["Trial Started (Active)"]["message"].replace(
+                "{hours}", str(total_hours)
+            ).replace("{user_name}", user.first_name or "Trader")
+            
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO userbot_dm_queue (user_id, message_text, label, status, created_at) VALUES ($1, $2, 'Trial Started', 'pending', $3)",
+                    user.id, trial_started_msg, current_time
+                )
+            await self.log_to_debug(f"📩 Trial Started DM queued for {user.first_name} (Expires in {total_hours}h)")
 
         AUTO_ROLE_CONFIG['active_members'][user_id_str] = {
             'joined_at': current_time.isoformat(),
