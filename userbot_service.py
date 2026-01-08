@@ -25,6 +25,8 @@ from datetime import datetime, timedelta
 import pytz
 import random
 from pyrogram.client import Client
+from pyrogram import filters
+from pyrogram.raw import functions, types
 from pyrogram.errors import FloodWait, PeerIdInvalid, UserPrivacyRestricted
 
 # Setup logging
@@ -318,8 +320,60 @@ class UserbotService:
                     lang_code="en",
                     no_updates=False,
                 )
+
+                # Register private message handler for auto-replies
+                @self.client.on_message(filters.private)
+                async def on_private_message(client, message):
+                    if not message.from_user or message.from_user.id == BOT_OWNER_USER_ID:
+                        return
+                    
+                    # Log the incoming message
+                    logger.info(f"Userbot received PM from {message.from_user.id}: {message.text[:50] if message.text else '[No text]'}")
+                    
+                    # Auto-reply message
+                    auto_reply_text = (
+                        "Hey! This is an automated trading account and I can't respond to messages here.\n\n"
+                        f"If you have any questions, please feel free to message my owner directly: [Owner](tg://user?id={BOT_OWNER_USER_ID})"
+                    )
+                    
+                    try:
+                        # Add a small delay to seem more natural
+                        await asyncio.sleep(2)
+                        await message.reply(auto_reply_text)
+                        await self.log_to_debug(f"🤖 Userbot auto-replied to {message.from_user.id}")
+                    except Exception as e:
+                        logger.error(f"Failed to send auto-reply: {e}")
+
                 await self.client.start()
                 logger.info("✅ Userbot Service: Connected successfully!")
+
+                # Apply Privacy Settings (Hide Phone Number, Profile Photo, Last Seen)
+                try:
+                    logger.info("🔒 Applying privacy settings to Userbot...")
+                    # Hide phone number from everyone
+                    await self.client.invoke(
+                        functions.account.SetPrivacy(
+                            key=types.InputPrivacyKeyPhoneNumber(),
+                            rules=[types.InputPrivacyValueDisallowAll()]
+                        )
+                    )
+                    # Allow profile photo to be seen by everyone
+                    await self.client.invoke(
+                        functions.account.SetPrivacy(
+                            key=types.InputPrivacyKeyProfilePhoto(),
+                            rules=[types.InputPrivacyValueAllowAll()]
+                        )
+                    )
+                    # Hide last seen from everyone
+                    await self.client.invoke(
+                        functions.account.SetPrivacy(
+                            key=types.InputPrivacyKeyStatusTimestamp(),
+                            rules=[types.InputPrivacyValueDisallowAll()]
+                        )
+                    )
+                    logger.info("✅ Privacy settings applied successfully!")
+                except Exception as priv_err:
+                    logger.error(f"Failed to apply privacy settings: {priv_err}")
                 
                 # Resolve initial Peer IDs by fetching dialogs
                 logger.info("🔍 Resolving initial Peer IDs (human-mimic mode)...")

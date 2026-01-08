@@ -580,12 +580,6 @@ class TelegramTradingBot:
             # Use the is_owner method for consistency
             is_owner = await self.is_owner(user_id)
             
-            # Check if we're waiting for a login code first, BEFORE the owner check
-            # This allows ANYONE who started a login to finish it.
-            if await self.process_userbot_code(client, message):
-                logger.info(f"Login code captured for user {user_id}")
-                return
-
             if not is_owner:
                 return
 
@@ -632,6 +626,11 @@ class TelegramTradingBot:
                 except ValueError:
                     await message.reply("Invalid price. Please enter a valid number (e.g., 2650.50):")
                 return
+
+    async def handle_newmemberslist_user_input(self, client: Client, message: Message):
+        """Handle user ID input for newmemberslist widget"""
+        # This is handled by handle_text_input
+        pass
 
     async def is_owner(self, user_id: int) -> bool:
         """Check if a user is the bot owner"""
@@ -2494,10 +2493,15 @@ class TelegramTradingBot:
         """Show all active VIP trial members with time remaining and join dates"""
         try:
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            monday = current_time - timedelta(days=current_time.weekday())
+            sunday = monday + timedelta(days=6)
+            
+            date_range_str = f"Monday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}"
             
             if not AUTO_ROLE_CONFIG['active_members']:
                 await callback_query.message.edit_text(
                     "**Active VIP Trial Members**\n\n"
+                    f"{date_range_str}\n\n"
                     "No active trial members at this time."
                 )
                 await callback_query.answer()
@@ -2536,10 +2540,9 @@ class TelegramTradingBot:
                     joiners_by_date[join_date_str] = 0
                 joiners_by_date[join_date_str] += 1
             
-            # Sort by time remaining (ascending - least time first)
             trials_with_time.sort(key=lambda x: x['total_seconds'])
             
-            text = "**Active VIP Trial Members**\n\n"
+            text = f"**Active VIP Trial Members**\n\n{date_range_str}\n"
             
             # Weekly summary
             total_weekly = len(trials_with_time)
