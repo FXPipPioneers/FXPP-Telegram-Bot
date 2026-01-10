@@ -316,7 +316,10 @@ class UserbotService:
                         label TEXT NOT NULL,
                         status TEXT DEFAULT 'pending',
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        sent_at TIMESTAMP WITH TIME ZONE
+                        sent_at TIMESTAMP WITH TIME ZONE,
+                        retry_count INTEGER DEFAULT 0,
+                        last_retry_at TIMESTAMP WITH TIME ZONE,
+                        abandoned BOOLEAN DEFAULT FALSE
                     )
                 """)
 
@@ -516,6 +519,12 @@ class UserbotService:
             await asyncio.sleep(int(wait_time))
             return await self.send_dm(user_id, message, label)
         except Exception as e:
+            err_msg = str(e)
+            if "PEER_FLOOD" in err_msg:
+                # Account limited - stop loop briefly and log once
+                logger.error(f"❌ Account Limited (PEER_FLOOD): {user_id} ({label})")
+                return False
+            
             await self.log_to_debug(
                 f"❌ Failed to send {label} to {user_id}: {e}")
             return False
@@ -688,24 +697,80 @@ class UserbotService:
                 except Exception as e:
                     logger.error(f"Error in Monday Activation block: {e}")
 
-                # 6. Process Queued DMs
+                # 6. Process Queued DMs (Tiered Retry Logic)
                 try:
                     queued_dms = []
                     async with self.db_pool.acquire() as conn:
-                        queued_dms = await conn.fetch("SELECT id, user_id, message_text, label, created_at FROM userbot_dm_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 10")
+                        # Fetch items that are pending and not abandoned
+                        queued_dms = await conn.fetch("""
+                            SELECT id, user_id, message_text, label, created_at, retry_count, last_retry_at 
+                            FROM userbot_dm_queue 
+                            WHERE status = 'pending' AND abandoned = FALSE 
+                            ORDER BY created_at ASC LIMIT 10
+                        """)
                     
                     for row in queued_dms:
-                        if row['label'] == 'Welcome DM':
+                        row_id = row['id']
+                        u_id = row['user_id']
+                        label = row['label']
+                        retries = row['retry_count']
+                        last_retry = row['last_retry_at']
+                        
+                        # 1. 10-minute initial delay for Welcome DMs
+                        if label == 'Welcome DM':
                             join_time = row['created_at']
                             if join_time.tzinfo is None: join_time = AMSTERDAM_TZ.localize(join_time)
                             if current_time < join_time + timedelta(minutes=10): continue
 
-                        success = await self.send_dm(row['user_id'], row['message_text'], row['label'])
+                        # 2. Tiered Retry Logic
+                        # Phase 1: First 3 tries (Immediate/Sequential)
+                        # Phase 2: After 3 tries, wait 30 minutes, then 3 more tries
+                        # Phase 3: After 6 tries, wait 3.5 hours, then 3 final tries
+                        # Total max tries: 9
+                        
+                        can_retry = False
+                        if retries == 0:
+                            can_retry = True
+                        elif retries < 3:
+                            # Try every minute (default loop interval)
+                            can_retry = True 
+                        elif 3 <= retries < 6:
+                            # 30-minute pause after 3rd try
+                            if last_retry and current_time >= last_retry + timedelta(minutes=30):
+                                can_retry = True
+                        elif 6 <= retries < 9:
+                            # 3.5-hour pause after 6th try
+                            if last_retry and current_time >= last_retry + timedelta(hours=3.5):
+                                can_retry = True
+                        else:
+                            # Abandon after 9 tries
+                            async with self.db_pool.acquire() as conn:
+                                await conn.execute("UPDATE userbot_dm_queue SET abandoned = TRUE, status = 'abandoned' WHERE id = $1", row_id)
+                            continue
+
+                        if not can_retry:
+                            continue
+
+                        # Execute the DM attempt
+                        success = await self.send_dm(u_id, row['message_text'], label)
+                        
                         async with self.db_pool.acquire() as conn:
                             if success:
-                                await conn.execute("UPDATE userbot_dm_queue SET status = 'sent', sent_at = $1 WHERE id = $2", current_time, row['id'])
+                                await conn.execute("""
+                                    UPDATE userbot_dm_queue 
+                                    SET status = 'sent', sent_at = $1::timestamptz 
+                                    WHERE id = $2::integer
+                                """, current_time, row_id)
+                                
+                                # Quietly log success to console, skip debug group spam
+                                logger.info(f"✅ Sent {label} to {u_id}")
                             else:
-                                await conn.execute("UPDATE userbot_dm_queue SET status = 'failed' WHERE id = $2", row['id'])
+                                await conn.execute("""
+                                    UPDATE userbot_dm_queue 
+                                    SET retry_count = retry_count + 1, 
+                                        last_retry_at = $1::timestamptz 
+                                    WHERE id = $2::integer
+                                """, current_time, row_id)
                 except Exception as e:
                     logger.error(f"Error in Queue processing block: {e}")
 

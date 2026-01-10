@@ -971,6 +971,35 @@ class TelegramTradingBot:
             logger.error(f"Error parsing signal message: {e}")
             return None
 
+    async def update_onboarding_widget(self, user_id: int, step: int, total_steps: int, status_text: str, message_id: Optional[int] = None):
+        """Updates a consolidated onboarding message for a specific user."""
+        try:
+            # Standard professional header
+            msg_text = f"👤 **Member Onboarding: {user_id}**\n\n"
+            msg_text += f"📊 **Progress:** Step {step}/{total_steps}\n"
+            msg_text += f"📝 **Status:** {status_text}\n"
+            msg_text += f"\n👤 **User ID:** `{user_id}`"
+            
+            # Build the button URL to open user's profile
+            button_url = f"tg://user?id={user_id}"
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("👤 View User Profile", url=button_url)
+            ]])
+
+            if message_id:
+                try:
+                    await self.app.edit_message_text(DEBUG_GROUP_ID, message_id, msg_text, reply_markup=keyboard)
+                    return message_id
+                except Exception:
+                    # If edit fails (e.g. message too old), send new one
+                    pass
+            
+            sent_msg = await self.app.send_message(DEBUG_GROUP_ID, msg_text, reply_markup=keyboard)
+            return sent_msg.id
+        except Exception as e:
+            logger.error(f"Failed to update onboarding widget: {e}")
+            return None
+
     async def log_to_debug(self,
                            message: str,
                            is_error: bool = False,
@@ -3725,9 +3754,8 @@ class TelegramTradingBot:
                 f"✅ Successfully approved join request for {user_name} (ID: {user_id})"
             )
 
-            await self.log_to_debug(
-                f"🎯 Auto-approved trial join request from {user_name} (ID: {user_id}) - waiting for member join event..."
-            )
+            widget_id = getattr(self, 'onboarding_widgets', {}).get(user_id)
+            await self.update_onboarding_widget(user_id, 2, 4, "VIP Join Request Approved - waiting for user to enter chat...", widget_id)
         except Exception as e:
             logger.error(
                 f"❌ Error processing join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}"
@@ -3765,6 +3793,13 @@ class TelegramTradingBot:
             await self.handle_vip_group_join(client, user, invite_link)
 
     async def handle_free_group_join(self, client: Client, user):
+        # Initialize onboarding widget
+        widget_id = await self.update_onboarding_widget(user.id, 1, 4, "Joined FREE Group - Waiting 10m for Welcome DM")
+        if widget_id:
+            if not hasattr(self, 'onboarding_widgets'):
+                self.onboarding_widgets = {}
+            self.onboarding_widgets[user.id] = widget_id
+
         # Check if member tracking is enabled
         tracking_enabled = True
         if self.db_pool:
@@ -3779,9 +3814,7 @@ class TelegramTradingBot:
                 logger.error(f"Error checking tracking status: {e}")
 
         if not tracking_enabled:
-            await self.log_to_debug(
-                f"ℹ️ Member tracking is DISABLED. Ignoring join from {user.first_name} (ID: {user.id})"
-            )
+            await self.update_onboarding_widget(user.id, 1, 4, "Joined FREE Group (Tracking Disabled)", widget_id)
             return
 
         # Track free group join for engagement tracking
@@ -3840,17 +3873,11 @@ class TelegramTradingBot:
                         "INSERT INTO userbot_dm_queue (user_id, message_text, label, status, created_at) VALUES ($1, $2, 'Welcome DM', 'pending', $3)",
                         user.id, welcome_dm, current_time)
 
-                await self.log_to_debug(
-                    f"👤 New member joined FREE group: {user.first_name} (ID: {user.id}) - Welcome DM queued for Userbot (10m delay)"
-                )
+                # Log is now handled by the widget
             except Exception as e:
                 error_msg = f"❌ Error tracking free group join for {user.id}: {e}"
                 logger.error(error_msg)
-                # Avoid infinite error loop if debug logging fails too
-                try:
-                    await self.log_to_debug(error_msg)
-                except:
-                    pass
+                await self.update_onboarding_widget(user.id, 1, 4, f"Error: {e}", widget_id)
 
     async def show_member_db_widget(self, message):
         async with self.db_pool.acquire() as conn:
@@ -3908,6 +3935,7 @@ class TelegramTradingBot:
         """
         user_id_str = str(user.id)
         current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+        widget_id = getattr(self, 'onboarding_widgets', {}).get(user.id)
 
         # Determine if this is a trial user (they were approved for trial access)
         is_trial_user = user.id in self.trial_pending_approvals
@@ -3917,14 +3945,10 @@ class TelegramTradingBot:
 
         # If not trial user, don't register - they're paying members
         if not is_trial_user:
-            await self.log_to_debug(
-                f"💳 {user.first_name} (ID: {user.id}) joined via paid link - no trial registration needed",
-                user_id=user.id)
+            await self.update_onboarding_widget(user.id, 4, 4, "Joined VIP via Paid Link (Success)", widget_id)
             return
 
-        await self.log_to_debug(
-            f"🆓 Trial join detected: {user.first_name} (ID: {user.id})",
-            user_id=user.id)
+        await self.update_onboarding_widget(user.id, 2, 4, "Trial Join Detected - Registering Trial...", widget_id)
 
         # Check if this user has already used their trial
         has_used_trial = user_id_str in AUTO_ROLE_CONFIG['role_history']
@@ -3953,16 +3977,12 @@ class TelegramTradingBot:
                 db_check_failed = True
 
         if db_check_failed:
-            await self.log_to_debug(
-                f"⚠️ Database check failed for {user.first_name} - allowing access but logging warning"
-            )
+            await self.update_onboarding_widget(user.id, 2, 4, "DB check failed (allowing access anyway)", widget_id)
 
         # If user already used trial once, they shouldn't have gotten past join request approval
         # But as a safety check if they somehow made it here, send them a message and log it
         if has_used_trial:
-            await self.log_to_debug(
-                f"⚠️ Warning: User {user.first_name} ({user.id}) joined despite trial already used - should have been rejected at join request"
-            )
+            await self.update_onboarding_widget(user.id, 2, 4, "❌ Rejected: Trial used before", widget_id)
 
             try:
                 rejection_dm = MESSAGE_TEMPLATES["Trial Status & Expiry"][
@@ -3977,20 +3997,15 @@ class TelegramTradingBot:
             # Don't kick - they should have been rejected at join request stage
             return
 
-        # New trial user - register for 72 trading hour trial
-        await self.log_to_debug(
-            f"✅ Registering {user.first_name} for 72 trading hour trial")
-
         # Calculate expiry time to ensure exactly 3 trading days
         expiry_time = self.calculate_trial_expiry_time(current_time)
+        await self.update_onboarding_widget(user.id, 3, 4, f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
 
         # Determine if joined during weekend for tracking
         is_weekend = self.is_weekend_time(current_time)
 
         # Queue Trial Started DM if not weekend
         if not is_weekend:
-            # Calculate dynamic hours based on trading days
-            # expiry_time is already calculated to skip weekends
             time_diff = expiry_time - current_time
             total_hours = int(time_diff.total_seconds() / 3600)
 
@@ -4004,9 +4019,6 @@ class TelegramTradingBot:
                 await conn.execute(
                     "INSERT INTO userbot_dm_queue (user_id, message_text, label, status, created_at) VALUES ($1, $2, 'Trial Started', 'pending', $3)",
                     user.id, trial_started_msg, current_time)
-            await self.log_to_debug(
-                f"📩 Trial Started DM queued for {user.first_name} (Expires in {total_hours}h)"
-            )
 
         AUTO_ROLE_CONFIG['active_members'][user_id_str] = {
             'joined_at': current_time.isoformat(),
@@ -4038,11 +4050,7 @@ class TelegramTradingBot:
                 logger.error(
                     f"Error recording trial activation in database: {e}")
 
-        # NOTE: Welcome DM is sent to users when they join the FREE group, not here.
-        # Users who join the VIP group have already activated their trial by clicking the invite link.
-        await self.log_to_debug(
-            f"Trial activated for {user.first_name} (expires {expiry_time.strftime('%A at %H:%M')})"
-        )
+        await self.update_onboarding_widget(user.id, 4, 4, f"✅ Trial Active! (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
 
     async def get_working_api_for_pair(self, pair: str) -> str:
         pair_clean = pair.upper().replace("/",
@@ -4833,6 +4841,35 @@ class TelegramTradingBot:
                 logger.error(
                     f"Failed to send breakeven notification without reply: {e2}"
                 )
+
+    async def update_onboarding_widget(self, user_id: int, step: int, total_steps: int, status_text: str, message_id: Optional[int] = None):
+        """Updates a consolidated onboarding message for a specific user."""
+        try:
+            # Standard professional header
+            msg_text = f"👤 **Member Onboarding: {user_id}**\n\n"
+            msg_text += f"📊 **Progress:** Step {step}/{total_steps}\n"
+            msg_text += f"📝 **Status:** {status_text}\n"
+            msg_text += f"\n👤 **User ID:** `{user_id}`"
+            
+            # Build the button URL to open user's profile
+            button_url = f"tg://user?id={user_id}"
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("👤 View User Profile", url=button_url)
+            ]])
+
+            if message_id:
+                try:
+                    await self.app.edit_message_text(DEBUG_GROUP_ID, message_id, msg_text, reply_markup=keyboard)
+                    return message_id
+                except Exception:
+                    # If edit fails (e.g. message too old), send new one
+                    pass
+            
+            sent_msg = await self.app.send_message(DEBUG_GROUP_ID, msg_text, reply_markup=keyboard)
+            return sent_msg.id
+        except Exception as e:
+            logger.error(f"Failed to update onboarding widget: {e}")
+            return None
 
     async def log_to_debug(self,
                            message: str,
