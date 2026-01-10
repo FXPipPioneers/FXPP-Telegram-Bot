@@ -1023,66 +1023,60 @@ class TelegramTradingBot:
 
     def calculate_trial_expiry_time(self, join_time: datetime) -> datetime:
         """
-        Calculate trial expiry time to ensure exactly 3 trading days.
-        Trading days: Monday-Friday only (3 full trading days AFTER join date)
+        Calculate trial expiry time to ensure exactly 3 trading days (72 hours of market time).
+        Trading markets: Monday 00:00 to Friday 23:59.
         
-        Rules:
-        - Saturday/Sunday joiners: Always expire Wednesday 22:59 (regardless of join time)
-        - All other days: Expire exactly 3 trading days after join at the same time they joined
-        
-        Examples:
-        - Saturday 13:37 join → expires Wednesday 22:59
-        - Sunday 03:00 join → expires Wednesday 22:59
-        - Monday 00:10 join → expires Thursday 00:10 (Tue, Wed, Thu = 3 trading days)
-        - Friday 13:37 join → expires Wednesday 13:37 (Mon, Tue, Wed = 3 trading days)
-        - Wednesday 14:00 join → expires Monday 14:00 (Thu, Fri, Mon = 3 trading days)
+        Logic:
+        - If joined during market hours (Mon-Fri): The "clock" starts immediately.
+        - If joined during weekend: The "clock" starts Monday 00:00.
+        - The trial lasts for 72 trading hours.
+        - Any time spent in the weekend does not count towards the 72 hours.
         """
         if join_time.tzinfo is None:
             join_time = AMSTERDAM_TZ.localize(join_time)
         else:
             join_time = join_time.astimezone(AMSTERDAM_TZ)
 
-        weekday = join_time.weekday(
-        )  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+        # If joined on weekend, start the clock at Monday 00:00
+        # Saturday = 5, Sunday = 6
+        if join_time.weekday() >= 5:
+            days_to_monday = 7 - join_time.weekday()
+            start_time = (join_time + timedelta(days=days_to_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start_time = join_time
 
-        # If joined on Saturday or Sunday, always expire Wednesday 22:59
-        if weekday >= 5:  # 5=Saturday, 6=Sunday
-            current_date = join_time.date()
-            # Find the next Wednesday
-            while current_date.weekday() != 2:  # 2 = Wednesday
-                current_date += timedelta(days=1)
+        # We need to add 72 hours of "trading time"
+        hours_to_add = 72
+        current_time = start_time
+        
+        # Move forward hour by hour (or day by day for efficiency) to find the expiration
+        # However, for 3 days (72 hours), the logic is simple:
+        # If we add 3 days and hit a weekend, we shift by 2 days.
+        
+        # Simple skip-weekend logic for exactly 72 hours:
+        # Day 1: 24h, Day 2: 24h, Day 3: 24h.
+        expiry_time = start_time + timedelta(days=3)
+        
+        # If the 3-day span crosses a weekend, add 2 days (48 hours)
+        # Weekends are Sat/Sun. 
+        # If join Mon -> Thu (No weekend)
+        # If join Tue -> Fri (No weekend)
+        # If join Wed -> Sat -> shift to Mon
+        # If join Thu -> Sun -> shift to Tue
+        # If join Fri -> Mon -> shift to Wed
+        
+        # Check how many weekend days are in the range
+        temp_time = start_time
+        while temp_time < expiry_time:
+            if temp_time.weekday() >= 5: # Sat or Sun
+                expiry_time += timedelta(days=1)
+            temp_time += timedelta(days=1)
+            
+        # Final check if the resulting expiry_time itself lands on a weekend
+        while expiry_time.weekday() >= 5:
+            expiry_time += timedelta(days=1)
 
-            expiry_time = AMSTERDAM_TZ.localize(
-                datetime(current_date.year, current_date.month,
-                         current_date.day, 22, 59, 0))
-            return expiry_time
-
-        # For other weekdays, count exactly 3 trading days INCLUDING the join date if early enough
-        # or starting from the next trading day if after market hours.
-        # However, to keep it simple and consistent with your rule:
-        # Friday (1), Monday (2), Tuesday (3)
-
-        trading_days_counted = 0
-        current_date = join_time.date()
-
-        while True:
-            day_weekday = current_date.weekday()
-
-            # Only count weekdays (Mon-Fri)
-            if day_weekday < 5:
-                trading_days_counted += 1
-
-                # If we've counted 3 trading days, set expiry at the same time as join
-                if trading_days_counted == 3:
-                    expiry_datetime = datetime(current_date.year,
-                                               current_date.month,
-                                               current_date.day,
-                                               join_time.hour,
-                                               join_time.minute,
-                                               join_time.second)
-                    return AMSTERDAM_TZ.localize(expiry_datetime)
-
-            current_date += timedelta(days=1)
+        return expiry_time.astimezone(AMSTERDAM_TZ)
 
     def calculate_tp_sl_levels(self, entry_price: float, pair: str,
                                action: str) -> dict:
@@ -3983,9 +3977,9 @@ class TelegramTradingBot:
             # Don't kick - they should have been rejected at join request stage
             return
 
-        # New trial user - register for 3-day trial
+        # New trial user - register for 72 trading hour trial
         await self.log_to_debug(
-            f"✅ Registering {user.first_name} for 3-day trial")
+            f"✅ Registering {user.first_name} for 72 trading hour trial")
 
         # Calculate expiry time to ensure exactly 3 trading days
         expiry_time = self.calculate_trial_expiry_time(current_time)

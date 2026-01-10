@@ -401,8 +401,6 @@ class UserbotService:
                     )
 
                     try:
-                        # Add a small delay to seem more natural
-                        await asyncio.sleep(2)
                         await message.reply(auto_reply_text)
                         await self.log_to_debug(
                             f"🤖 Userbot auto-replied to {message.from_user.id}"
