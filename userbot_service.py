@@ -197,6 +197,22 @@ class UserbotService:
                                 logger.error(
                                     f"Error adding sent_at column: {e}")
 
+                            # 7. Ensure last_retry_at column exists
+                            try:
+                                has_last_retry = await conn.fetchval("""
+                                    SELECT count(*) FROM information_schema.columns 
+                                    WHERE table_name = 'userbot_dm_queue' AND column_name = 'last_retry_at'
+                                """)
+                                if has_last_retry == 0:
+                                    await conn.execute(
+                                        "ALTER TABLE userbot_dm_queue ADD COLUMN last_retry_at TIMESTAMP WITH TIME ZONE"
+                                    )
+                                    logger.info(
+                                        "✅ Added missing 'last_retry_at' column")
+                            except Exception as e:
+                                logger.error(
+                                    f"Error adding last_retry_at column: {e}")
+
                             # 4. FIX: Handle potential column naming variations and ensure 'label' or 'message_text' is large enough
                             # We use TRY blocks for each to be safe
                             try:
@@ -762,6 +778,14 @@ class UserbotService:
                                     WHERE id = $2::integer
                                 """, current_time, row_id)
                                 
+                                # Update onboarding widget for Welcome DM success
+                                if label == 'Welcome DM':
+                                    try:
+                                        # Main Bot manages this; we just update the status text in DB or log it
+                                        # Since we're in dual-service, we use the debug log which Main Bot can see or just update widget
+                                        await conn.execute("INSERT INTO bot_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", f"widget_status_{u_id}", "✅ Welcome DM Sent Successfully!")
+                                    except Exception: pass
+                                
                                 # Quietly log success to console, skip debug group spam
                                 logger.info(f"✅ Sent {label} to {u_id}")
                             else:
@@ -771,6 +795,12 @@ class UserbotService:
                                         last_retry_at = $1::timestamptz 
                                     WHERE id = $2::integer
                                 """, current_time, row_id)
+                                
+                                # Update onboarding widget for Welcome DM failure
+                                if label == 'Welcome DM':
+                                    try:
+                                        await conn.execute("INSERT INTO bot_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", f"widget_status_{u_id}", f"❌ Welcome DM Failed (Attempt {retries + 1})")
+                                    except Exception: pass
                 except Exception as e:
                     logger.error(f"Error in Queue processing block: {e}")
 

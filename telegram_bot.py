@@ -3755,7 +3755,7 @@ class TelegramTradingBot:
             )
 
             widget_id = getattr(self, 'onboarding_widgets', {}).get(user_id)
-            await self.update_onboarding_widget(user_id, 2, 4, "VIP Join Request Approved - waiting for user to enter chat...", widget_id)
+            await self.update_onboarding_widget(user_id, 3, 5, "VIP Join Request Approved - waiting for user to enter chat...", widget_id)
         except Exception as e:
             logger.error(
                 f"❌ Error processing join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}"
@@ -3793,8 +3793,8 @@ class TelegramTradingBot:
             await self.handle_vip_group_join(client, user, invite_link)
 
     async def handle_free_group_join(self, client: Client, user):
-        # Initialize onboarding widget
-        widget_id = await self.update_onboarding_widget(user.id, 1, 4, "Joined FREE Group - Waiting 10m for Welcome DM")
+        # Initialize onboarding widget - 5 steps now
+        widget_id = await self.update_onboarding_widget(user.id, 1, 5, "Joined FREE Group - Waiting 10m for Welcome DM")
         if widget_id:
             if not hasattr(self, 'onboarding_widgets'):
                 self.onboarding_widgets = {}
@@ -3814,7 +3814,7 @@ class TelegramTradingBot:
                 logger.error(f"Error checking tracking status: {e}")
 
         if not tracking_enabled:
-            await self.update_onboarding_widget(user.id, 1, 4, "Joined FREE Group (Tracking Disabled)", widget_id)
+            await self.update_onboarding_widget(user.id, 1, 5, "Joined FREE Group (Tracking Disabled)", widget_id)
             return
 
         # Track free group join for engagement tracking
@@ -3823,40 +3823,6 @@ class TelegramTradingBot:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
                 async with self.db_pool.acquire() as conn:
-                    # Ensure completed_trades table exists
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS completed_trades (
-                            id SERIAL PRIMARY KEY,
-                            pair VARCHAR(20) NOT NULL,
-                            entry_price DECIMAL,
-                            exit_price DECIMAL,
-                            pips DECIMAL,
-                            result VARCHAR(20),
-                            closed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                            message_id BIGINT
-                        );
-                    """)
-
-                    # Fix 1: Ensure column exists with correct name (for existing DBs)
-                    await conn.execute("""
-                        DO $$ 
-                        BEGIN 
-                            -- 1. Rename 'message' to 'message_text'
-                            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='message') THEN
-                                ALTER TABLE userbot_dm_queue RENAME COLUMN message TO message_text;
-                            END IF;
-                            
-                            -- 2. Rename 'message_content' to 'message_text'
-                            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='message_content') THEN
-                                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='message_text') THEN
-                                    ALTER TABLE userbot_dm_queue RENAME COLUMN message_content TO message_text;
-                                ELSE
-                                    ALTER TABLE userbot_dm_queue ALTER COLUMN message_content DROP NOT NULL;
-                                END IF;
-                            END IF;
-                        END $$;
-                    """)
-
                     # Track for engagement
                     await conn.execute(
                         '''INSERT INTO free_group_joins (user_id, joined_at, discount_sent)
@@ -3945,10 +3911,10 @@ class TelegramTradingBot:
 
         # If not trial user, don't register - they're paying members
         if not is_trial_user:
-            await self.update_onboarding_widget(user.id, 4, 4, "Joined VIP via Paid Link (Success)", widget_id)
+            await self.update_onboarding_widget(user.id, 5, 5, "Joined VIP via Paid Link (Success)", widget_id)
             return
 
-        await self.update_onboarding_widget(user.id, 2, 4, "Trial Join Detected - Registering Trial...", widget_id)
+        await self.update_onboarding_widget(user.id, 3, 5, "Trial Join Detected - Registering Trial...", widget_id)
 
         # Check if this user has already used their trial
         has_used_trial = user_id_str in AUTO_ROLE_CONFIG['role_history']
@@ -3977,12 +3943,12 @@ class TelegramTradingBot:
                 db_check_failed = True
 
         if db_check_failed:
-            await self.update_onboarding_widget(user.id, 2, 4, "DB check failed (allowing access anyway)", widget_id)
+            await self.update_onboarding_widget(user.id, 3, 5, "DB check failed (allowing access anyway)", widget_id)
 
         # If user already used trial once, they shouldn't have gotten past join request approval
         # But as a safety check if they somehow made it here, send them a message and log it
         if has_used_trial:
-            await self.update_onboarding_widget(user.id, 2, 4, "❌ Rejected: Trial used before", widget_id)
+            await self.update_onboarding_widget(user.id, 3, 5, "❌ Rejected: Trial used before", widget_id)
 
             try:
                 rejection_dm = MESSAGE_TEMPLATES["Trial Status & Expiry"][
@@ -3999,7 +3965,7 @@ class TelegramTradingBot:
 
         # Calculate expiry time to ensure exactly 3 trading days
         expiry_time = self.calculate_trial_expiry_time(current_time)
-        await self.update_onboarding_widget(user.id, 3, 4, f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
+        await self.update_onboarding_widget(user.id, 4, 5, f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
 
         # Determine if joined during weekend for tracking
         is_weekend = self.is_weekend_time(current_time)
@@ -4050,7 +4016,7 @@ class TelegramTradingBot:
                 logger.error(
                     f"Error recording trial activation in database: {e}")
 
-        await self.update_onboarding_widget(user.id, 4, 4, f"✅ Trial Active! (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
+        await self.update_onboarding_widget(user.id, 5, 5, f"✅ Trial Active! (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
 
     async def get_working_api_for_pair(self, pair: str) -> str:
         pair_clean = pair.upper().replace("/",
@@ -4841,227 +4807,6 @@ class TelegramTradingBot:
                 logger.error(
                     f"Failed to send breakeven notification without reply: {e2}"
                 )
-
-    async def update_onboarding_widget(self, user_id: int, step: int, total_steps: int, status_text: str, message_id: Optional[int] = None):
-        """Updates a consolidated onboarding message for a specific user."""
-        try:
-            # Standard professional header
-            msg_text = f"👤 **Member Onboarding: {user_id}**\n\n"
-            msg_text += f"📊 **Progress:** Step {step}/{total_steps}\n"
-            msg_text += f"📝 **Status:** {status_text}\n"
-            msg_text += f"\n👤 **User ID:** `{user_id}`"
-            
-            # Build the button URL to open user's profile
-            button_url = f"tg://user?id={user_id}"
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("👤 View User Profile", url=button_url)
-            ]])
-
-            if message_id:
-                try:
-                    await self.app.edit_message_text(DEBUG_GROUP_ID, message_id, msg_text, reply_markup=keyboard)
-                    return message_id
-                except Exception:
-                    # If edit fails (e.g. message too old), send new one
-                    pass
-            
-            sent_msg = await self.app.send_message(DEBUG_GROUP_ID, msg_text, reply_markup=keyboard)
-            return sent_msg.id
-        except Exception as e:
-            logger.error(f"Failed to update onboarding widget: {e}")
-            return None
-
-    async def log_to_debug(self,
-                           message: str,
-                           is_error: bool = False,
-                           user_id: Optional[int] = None,
-                           failed_message: Optional[str] = None):
-        if DEBUG_GROUP_ID:
-            try:
-                # Standardize professional debug headers
-                if is_error:
-                    msg_text = f"🚨 **SYSTEM ERROR**\n\n**Issue:** {message}\n\n@fx_pippioneers"
-                else:
-                    msg_text = f"📊 **SYSTEM LOG**\n\n**Event:** {message}"
-
-                # Add user ID button if user_id is provided
-                keyboard = None
-                if user_id:
-                    msg_text += f"\n\n👤 **User ID:** `{user_id}`"
-
-                    # Build the button URL to open user's profile
-                    button_url = f"tg://user?id={user_id}"
-
-                    keyboard = InlineKeyboardMarkup([[
-                        InlineKeyboardButton("👤 View User Profile",
-                                             url=button_url)
-                    ]])
-
-                await self.app.send_message(DEBUG_GROUP_ID,
-                                            msg_text,
-                                            reply_markup=keyboard)
-            except Exception as e:
-                logger.error(f"Failed to send debug log: {e}")
-        log_level = logging.ERROR if is_error else logging.INFO
-        logger.log(log_level, message)
-
-    async def init_database(self):
-        try:
-            database_url = os.getenv('DATABASE_URL')
-            if not database_url:
-                logger.warning(
-                    "No database URL found - continuing without persistent memory"
-                )
-                return
-
-            import ssl
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-
-            self.db_pool = await asyncpg.create_pool(
-                database_url,
-                min_size=1,
-                ssl=ctx,
-                max_size=5,
-                command_timeout=30,
-                server_settings={'application_name': 'telegram-trading-bot'})
-            logger.info("PostgreSQL connection pool created")
-
-            async with self.db_pool.acquire() as conn:
-                # Core VIP and Trial tables
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS role_history (
-                        member_id BIGINT PRIMARY KEY,
-                        first_granted TIMESTAMP WITH TIME ZONE NOT NULL,
-                        times_granted INTEGER DEFAULT 1,
-                        last_expired TIMESTAMP WITH TIME ZONE,
-                        guild_id BIGINT NOT NULL
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS active_members (
-                        member_id BIGINT PRIMARY KEY,
-                        role_added_time TIMESTAMP WITH TIME ZONE NOT NULL,
-                        role_id BIGINT NOT NULL,
-                        guild_id BIGINT NOT NULL,
-                        weekend_delayed BOOLEAN DEFAULT FALSE,
-                        expiry_time TIMESTAMP WITH TIME ZONE,
-                        custom_duration BOOLEAN DEFAULT FALSE,
-                        monday_notification_sent BOOLEAN DEFAULT FALSE
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS weekend_pending (
-                        member_id BIGINT PRIMARY KEY,
-                        join_time TIMESTAMP WITH TIME ZONE NOT NULL,
-                        guild_id BIGINT NOT NULL
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS dm_schedule (
-                        member_id BIGINT PRIMARY KEY,
-                        role_expired TIMESTAMP WITH TIME ZONE NOT NULL,
-                        guild_id BIGINT NOT NULL,
-                        dm_3_sent BOOLEAN DEFAULT FALSE,
-                        dm_7_sent BOOLEAN DEFAULT FALSE,
-                        dm_14_sent BOOLEAN DEFAULT FALSE
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS bot_status (
-                        id INTEGER PRIMARY KEY DEFAULT 1,
-                        last_online TIMESTAMP WITH TIME ZONE,
-                        heartbeat_time TIMESTAMP WITH TIME ZONE,
-                        CONSTRAINT tg_single_row_constraint UNIQUE (id)
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS bot_settings (
-                        setting_key VARCHAR(100) PRIMARY KEY,
-                        setting_value TEXT NOT NULL
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS active_trades (
-                        message_id VARCHAR(100) PRIMARY KEY,
-                        channel_id BIGINT NOT NULL,
-                        guild_id BIGINT NOT NULL,
-                        pair VARCHAR(20) NOT NULL,
-                        action VARCHAR(10) NOT NULL,
-                        entry_price DECIMAL(30,15) NOT NULL,
-                        tp1_price DECIMAL(30,15) NOT NULL,
-                        tp2_price DECIMAL(30,15) NOT NULL,
-                        tp3_price DECIMAL(30,15) NOT NULL,
-                        sl_price DECIMAL(30,15) NOT NULL,
-                        telegram_entry DECIMAL(30,15),
-                        telegram_tp1 DECIMAL(30,15),
-                        telegram_tp2 DECIMAL(30,15),
-                        telegram_tp3 DECIMAL(30,15),
-                        telegram_sl DECIMAL(30,15),
-                        live_entry DECIMAL(30,15),
-                        assigned_api VARCHAR(30) DEFAULT 'currencybeacon',
-                        status VARCHAR(50) DEFAULT 'active',
-                        tp_hits TEXT DEFAULT '',
-                        breakeven_active BOOLEAN DEFAULT FALSE,
-                        entry_type VARCHAR(30),
-                        manual_overrides TEXT DEFAULT '',
-                        channel_message_map TEXT DEFAULT '',
-                        all_channel_ids TEXT DEFAULT '',
-                        manual_tracking_only BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                """)
-
-                try:
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS telegram_entry DECIMAL(30,15)'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS telegram_tp1 DECIMAL(30,15)'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS telegram_tp2 DECIMAL(30,15)'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS telegram_tp3 DECIMAL(30,15)'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS telegram_sl DECIMAL(30,15)'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS live_entry DECIMAL(30,15)'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS assigned_api VARCHAR(30) DEFAULT \'currencybeacon\''
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS manual_overrides TEXT DEFAULT \'\''
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS channel_message_map TEXT DEFAULT \'\''
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS all_channel_ids TEXT DEFAULT \'\''
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS group_name VARCHAR(30) DEFAULT \'\''
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ADD COLUMN IF NOT EXISTS manual_tracking_only BOOLEAN DEFAULT FALSE'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_members ADD COLUMN IF NOT EXISTS monday_notification_sent BOOLEAN DEFAULT FALSE'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE active_trades ALTER COLUMN message_id TYPE VARCHAR(100)'
-                    )
-                    await conn.execute(
-                        'ALTER TABLE completed_trades ALTER COLUMN message_id TYPE VARCHAR(100)'
-                    )
-                except Exception:
-                    pass
 
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS completed_trades (
@@ -6689,6 +6434,32 @@ class TelegramTradingBot:
         logger.info("Starting active trial peer discovery...")
         pass
 
+    async def handle_welcome_dm_status_check(self):
+        """Background task to check for Welcome DM status updates from Userbot."""
+        while True:
+            try:
+                if self.db_pool:
+                    async with self.db_pool.acquire() as conn:
+                        # Find any pending widget status updates
+                        status_updates = await conn.fetch("SELECT setting_key, setting_value FROM bot_settings WHERE setting_key LIKE 'widget_status_%'")
+                        for update in status_updates:
+                            try:
+                                user_id = int(update['setting_key'].replace('widget_status_', ''))
+                                status_text = update['setting_value']
+                                
+                                widget_id = getattr(self, 'onboarding_widgets', {}).get(user_id)
+                                if widget_id:
+                                    # Update to Step 2/5 (Welcome DM Status)
+                                    await self.update_onboarding_widget(user_id, 2, 5, status_text, widget_id)
+                                    
+                                # Clear the update after processing
+                                await conn.execute("DELETE FROM bot_settings WHERE setting_key = $1", update['setting_key'])
+                            except Exception as e:
+                                logger.error(f"Error processing widget update: {e}")
+            except Exception as e:
+                logger.error(f"Error in welcome dm status loop: {e}")
+            await asyncio.sleep(30)
+
     async def run(self):
         await self.init_database()
 
@@ -6738,6 +6509,7 @@ class TelegramTradingBot:
         # ONLY Signal Engine loops remain
         asyncio.create_task(self.price_tracking_loop())
         asyncio.create_task(self.peer_id_escalation_loop())
+        asyncio.create_task(self.handle_welcome_dm_status_check())
 
         try:
             while self.running:
