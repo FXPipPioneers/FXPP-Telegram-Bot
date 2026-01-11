@@ -213,6 +213,22 @@ class UserbotService:
                                 logger.error(
                                     f"Error adding last_retry_at column: {e}")
 
+                            # 8. Ensure abandoned column exists
+                            try:
+                                has_abandoned = await conn.fetchval("""
+                                    SELECT count(*) FROM information_schema.columns 
+                                    WHERE table_name = 'userbot_dm_queue' AND column_name = 'abandoned'
+                                """)
+                                if has_abandoned == 0:
+                                    await conn.execute(
+                                        "ALTER TABLE userbot_dm_queue ADD COLUMN abandoned BOOLEAN DEFAULT FALSE"
+                                    )
+                                    logger.info(
+                                        "✅ Added missing 'abandoned' column")
+                            except Exception as e:
+                                logger.error(
+                                    f"Error adding abandoned column: {e}")
+
                             # 4. FIX: Handle potential column naming variations and ensure 'label' or 'message_text' is large enough
                             # We use TRY blocks for each to be safe
                             try:
