@@ -6461,7 +6461,12 @@ class TelegramTradingBot:
             await asyncio.sleep(30)
 
     async def run(self):
-        await self.init_database()
+        # Wait for database pool to initialize if it's still pending
+        if hasattr(self, 'db_pool_future'):
+            try:
+                await self.db_pool_future
+            except Exception as e:
+                logger.error(f"Failed to initialize database pool: {e}")
 
         await self.app.start()
         logger.info("Telegram bot started!")
