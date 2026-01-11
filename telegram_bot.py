@@ -1009,7 +1009,7 @@ class TelegramTradingBot:
             try:
                 # Standardize professional debug headers
                 if is_error:
-                    msg_text = f"🚨 **SYSTEM ERROR**\n\n**Issue:** {message}\n\n@fx_pippioneers"
+                    msg_text = f"🚨 **SYSTEM ERROR**\n\n**Issue:** {message}\n\n[Owner](tg://user?id={BOT_OWNER_USER_ID})"
                 else:
                     msg_text = f"📊 **SYSTEM LOG**\n\n**Event:** {message}"
 
@@ -2597,11 +2597,36 @@ class TelegramTradingBot:
             return
 
         if data == "nml_free_group":
-            await self._show_free_group_joiners(callback_query)
+            await self._show_free_group_joiners(callback_query, week_offset=0)
+        elif data.startswith("nml_free_group_prev_"):
+            offset = int(data.split("_")[-1])
+            await self._show_free_group_joiners(callback_query, week_offset=offset)
         elif data == "nml_vip_trial":
-            await self._show_vip_trial_joiners(callback_query)
+            await self._show_vip_trial_joiners(callback_query, week_offset=0)
+        elif data.startswith("nml_vip_trial_prev_"):
+            offset = int(data.split("_")[-1])
+            await self._show_vip_trial_joiners(callback_query, week_offset=offset)
+        elif data == "nml_back":
+            # Re-show the main menu
+            keyboard = InlineKeyboardMarkup(
+                [[
+                    InlineKeyboardButton("👥 Free Group Joiners",
+                                         callback_data="nml_free_group")
+                ],
+                 [
+                     InlineKeyboardButton("⭐ VIP Trial Joiners",
+                                          callback_data="nml_vip_trial")
+                 ], [InlineKeyboardButton("❌ Close", callback_data="nml_close")]])
 
-    async def _show_free_group_joiners(self, callback_query: CallbackQuery):
+            await callback_query.message.edit_text(
+                "**New Members Tracking**\n\n"
+                "Select an option to view member data:\n\n"
+                "📊 **Free Group Joiners** - Shows all free group joiners grouped by week\n"
+                "⭐ **VIP Trial Joiners** - Shows members with active VIP trial and days remaining",
+                reply_markup=keyboard)
+            await callback_query.answer()
+
+    async def _show_free_group_joiners(self, callback_query: CallbackQuery, week_offset: int = 0):
         """Show free group joiners grouped by week with daily and weekly totals"""
         if not self.db_pool:
             await callback_query.message.edit_text("❌ Database not available")
@@ -2610,101 +2635,142 @@ class TelegramTradingBot:
 
         try:
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-            monday = current_time - timedelta(days=current_time.weekday())
+            monday = (current_time - timedelta(days=current_time.weekday())) - timedelta(weeks=week_offset)
             sunday = monday + timedelta(days=6)
+
+            # Ensure sunday is the end of the day for the query
+            sunday_end = sunday.replace(hour=23, minute=59, second=59)
 
             async with self.db_pool.acquire() as conn:
                 joins = await conn.fetch(
                     '''SELECT user_id, joined_at FROM free_group_joins 
                        WHERE joined_at >= $1 AND joined_at <= $2
-                       ORDER BY joined_at DESC''', monday, sunday)
+                       ORDER BY joined_at DESC''', monday, sunday_end)
+
+            week_label = "This Week" if week_offset == 0 else f"{week_offset} Week(s) Ago"
+            header = f"**Free Group Joiners - {week_label}**\n\nMonday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n"
 
             if not joins:
-                await callback_query.message.edit_text(
-                    f"**Free Group Joiners - This Week**\n\n"
-                    f"Monday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n\n"
-                    f"No new joiners this week.")
-                await callback_query.answer()
-                return
+                text = header + "\nNo new joiners this week."
+            else:
+                joiners_by_date = {}
+                for row in joins:
+                    date_key = row['joined_at'].strftime('%d-%m-%Y')
+                    if date_key not in joiners_by_date:
+                        joiners_by_date[date_key] = []
+                    joiners_by_date[date_key].append(f"User {row['user_id']}")
 
-            joiners_by_date = {}
-            for row in joins:
-                date_key = row['joined_at'].strftime('%d-%m-%Y')
-                if date_key not in joiners_by_date:
-                    joiners_by_date[date_key] = []
-                joiners_by_date[date_key].append(f"User {row['user_id']}")
+                total_weekly = len(joins)
+                text = header + f"**📊 Total This Week: {total_weekly} members**\n\n"
 
-            # Calculate weekly total
-            total_weekly = len(joins)
+                for date in sorted(joiners_by_date.keys(), reverse=True):
+                    users = ", ".join(joiners_by_date[date])
+                    daily_count = len(joiners_by_date[date])
+                    text += f"**{date}** ({daily_count}): {users}\n"
 
-            text = f"**Free Group Joiners - This Week**\n\nMonday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n"
-            text += f"**📊 Total This Week: {total_weekly} members**\n\n"
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Previous Week", callback_data=f"nml_free_group_prev_{week_offset + 1}")],
+                [InlineKeyboardButton("🔙 Back to Menu", callback_data="nml_back")]
+            ])
 
-            for date in sorted(joiners_by_date.keys(), reverse=True):
-                users = ", ".join(joiners_by_date[date])
-                daily_count = len(joiners_by_date[date])
-                text += f"**{date}** ({daily_count}): {users}\n"
-
-            await callback_query.message.edit_text(text)
+            await callback_query.message.edit_text(text, reply_markup=keyboard)
             await callback_query.answer()
         except Exception as e:
+            logger.error(f"Error in show_free_group_joiners: {e}")
             await callback_query.message.edit_text(f"❌ Error: {str(e)}")
             await callback_query.answer()
 
-    async def _show_vip_trial_joiners(self, callback_query: CallbackQuery):
+    async def _show_vip_trial_joiners(self, callback_query: CallbackQuery, week_offset: int = 0):
         """Show all active VIP trial members with time remaining and join dates"""
+        if not self.db_pool:
+            await callback_query.message.edit_text("❌ Database not available")
+            await callback_query.answer()
+            return
+
         try:
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-            monday = current_time - timedelta(days=current_time.weekday())
+            monday = (current_time - timedelta(days=current_time.weekday())) - timedelta(weeks=week_offset)
             sunday = monday + timedelta(days=6)
+            sunday_end = sunday.replace(hour=23, minute=59, second=59)
 
             date_range_str = f"Monday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}"
+            week_label = "This Week" if week_offset == 0 else f"{week_offset} Week(s) Ago"
 
-            if not AUTO_ROLE_CONFIG['active_members']:
-                await callback_query.message.edit_text(
-                    "**Active VIP Trial Members**\n\n"
-                    f"{date_range_str}\n\n"
-                    "No active trial members at this time.")
-                await callback_query.answer()
-                return
+            async with self.db_pool.acquire() as conn:
+                # Direct database fetch to ensure we have the latest data
+                # Filter by those who joined in the specified week AND are still active (not expired yet)
+                active_members = await conn.fetch("""
+                    SELECT member_id, role_added_time, expiry_time 
+                    FROM active_members 
+                    WHERE role_added_time >= $1 AND role_added_time <= $2
+                    AND expiry_time > $3
+                """, monday, sunday_end, current_time)
 
-            # Get all active trial members with dates
-            trials_with_time = []
-            joiners_by_date = {}
+            header = f"**Active VIP Trial Members - {week_label}**\n\n{date_range_str}\n"
 
-            for user_id_str, member_data in AUTO_ROLE_CONFIG[
-                    'active_members'].items():
-                expiry = datetime.fromisoformat(
-                    member_data.get('expiry_time', current_time.isoformat()))
-                if expiry.tzinfo is None:
-                    expiry = AMSTERDAM_TZ.localize(expiry)
+            if not active_members:
+                text = header + "\nNo active trial members from this week at this time."
+            else:
+                # Get all active trial members with dates
+                trials_with_time = []
+                joiners_by_date = {}
 
-                joined = datetime.fromisoformat(
-                    member_data.get('joined_at', current_time.isoformat()))
-                if joined.tzinfo is None:
-                    joined = AMSTERDAM_TZ.localize(joined)
+                for row in active_members:
+                    user_id = row['member_id']
+                    expiry = row['expiry_time']
+                    if expiry.tzinfo is None:
+                        expiry = AMSTERDAM_TZ.localize(expiry)
 
-                join_date_str = joined.strftime('%d-%m-%Y')
+                    joined = row['role_added_time']
+                    if joined.tzinfo is None:
+                        joined = AMSTERDAM_TZ.localize(joined)
 
-                time_left = expiry - current_time
-                total_seconds = max(0, time_left.total_seconds())
+                    join_date_str = joined.strftime('%d-%m-%Y')
 
-                trials_with_time.append({
-                    'user_id': user_id_str,
-                    'total_seconds': total_seconds,
-                    'expiry': expiry,
-                    'join_date': join_date_str,
-                    'joined': joined
-                })
+                    time_left = expiry - current_time
+                    total_seconds = max(0, time_left.total_seconds())
 
-                # Group by date for weekly summary
-                if join_date_str not in joiners_by_date:
-                    joiners_by_date[join_date_str] = 0
-                joiners_by_date[join_date_str] += 1
+                    trials_with_time.append({
+                        'user_id': str(user_id),
+                        'total_seconds': total_seconds,
+                        'expiry': expiry,
+                        'join_date': join_date_str,
+                        'joined': joined
+                    })
 
-            trials_with_time.sort(key=lambda x: x['total_seconds'])
+                    # Group by date for weekly summary
+                    if join_date_str not in joiners_by_date:
+                        joiners_by_date[join_date_str] = 0
+                    joiners_by_date[join_date_str] += 1
 
-            text = f"**Active VIP Trial Members**\n\n{date_range_str}\n"
+                trials_with_time.sort(key=lambda x: x['total_seconds'])
+
+                total_weekly = len(active_members)
+                text = header + f"**📊 Total This Week: {total_weekly} members**\n\n"
+
+                for date in sorted(joiners_by_date.keys(), reverse=True):
+                    daily_trials = [t for t in trials_with_time if t['join_date'] == date]
+                    daily_count = len(daily_trials)
+                    
+                    users_text = []
+                    for t in daily_trials:
+                        hours = int(t['total_seconds'] // 3600)
+                        minutes = int((t['total_seconds'] % 3600) // 60)
+                        users_text.append(f"User {t['user_id']} ({hours}h {minutes}m)")
+                    
+                    text += f"**{date}** ({daily_count}): {', '.join(users_text)}\n"
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Previous Week", callback_data=f"nml_vip_trial_prev_{week_offset + 1}")],
+                [InlineKeyboardButton("🔙 Back to Menu", callback_data="nml_back")]
+            ])
+
+            await callback_query.message.edit_text(text, reply_markup=keyboard)
+            await callback_query.answer()
+        except Exception as e:
+            logger.error(f"Error in show_vip_trial_joiners: {e}")
+            await callback_query.message.edit_text(f"❌ Error: {str(e)}")
+            await callback_query.answer()
 
             # Weekly summary
             total_weekly = len(trials_with_time)
