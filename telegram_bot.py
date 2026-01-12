@@ -974,6 +974,19 @@ class TelegramTradingBot:
     async def update_onboarding_widget(self, user_id: int, step: int, total_steps: int, status_text: str, message_id: Optional[int] = None):
         """Updates a consolidated onboarding message for a specific user."""
         try:
+            # If message_id is not provided, try to fetch it from memory or DB
+            if not message_id:
+                message_id = getattr(self, 'onboarding_widgets', {}).get(user_id)
+            
+            if not message_id and self.db_pool:
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        val = await conn.fetchval("SELECT status_value FROM bot_status WHERE status_key = $1", f"onboarding_msg_{user_id}")
+                        if val and val.isdigit():
+                            message_id = int(val)
+                except Exception:
+                    pass
+
             # Standard professional header
             msg_text = f"👤 **Member Onboarding: {user_id}**\n\n"
             msg_text += f"📊 **Progress:** Step {step}/{total_steps}\n"
@@ -990,11 +1003,28 @@ class TelegramTradingBot:
                 try:
                     await self.app.edit_message_text(DEBUG_GROUP_ID, message_id, msg_text, reply_markup=keyboard)
                     return message_id
-                except Exception:
-                    # If edit fails (e.g. message too old), send new one
+                except Exception as e:
+                    # If edit fails (e.g. message too old or deleted), send new one
+                    logger.debug(f"Edit failed for widget {message_id}: {e}")
                     pass
             
             sent_msg = await self.app.send_message(DEBUG_GROUP_ID, msg_text, reply_markup=keyboard)
+            
+            # Store the new message ID
+            if not hasattr(self, 'onboarding_widgets'):
+                self.onboarding_widgets = {}
+            self.onboarding_widgets[user_id] = sent_msg.id
+            
+            if self.db_pool:
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute(
+                            "INSERT INTO bot_status (status_key, status_value) VALUES ($1, $2) "
+                            "ON CONFLICT (status_key) DO UPDATE SET status_value = $2",
+                            f"onboarding_msg_{user_id}", str(sent_msg.id))
+                except Exception:
+                    pass
+                    
             return sent_msg.id
         except Exception as e:
             logger.error(f"Failed to update onboarding widget: {e}")
@@ -3861,13 +3891,8 @@ class TelegramTradingBot:
             await self.update_onboarding_widget(user.id, 1, 5, "Joined FREE Group (Tracking Disabled)", widget_id)
             return
 
-        # Track free group join for engagement tracking
-        if self.db_pool:
-            try:
-                current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-
+                # Track for engagement
                 async with self.db_pool.acquire() as conn:
-                    # Track for engagement
                     await conn.execute(
                         '''INSERT INTO free_group_joins (user_id, joined_at, discount_sent)
                            VALUES ($1, $2, FALSE)
@@ -3883,7 +3908,11 @@ class TelegramTradingBot:
                         "INSERT INTO userbot_dm_queue (user_id, message_text, label, status, created_at) VALUES ($1, $2, 'Welcome DM', 'pending', $3)",
                         user.id, welcome_dm, current_time)
 
-                # Log is now handled by the widget
+                    # Database entry: Track onboarding message IDs for persistence
+                    await conn.execute(
+                        "INSERT INTO bot_status (status_key, status_value) VALUES ($1, $2) "
+                        "ON CONFLICT (status_key) DO UPDATE SET status_value = $2",
+                        f"onboarding_msg_{user.id}", str(widget_id))
             except Exception as e:
                 error_msg = f"❌ Error tracking free group join for {user.id}: {e}"
                 logger.error(error_msg)
@@ -3956,9 +3985,23 @@ class TelegramTradingBot:
         # If not trial user, don't register - they're paying members
         if not is_trial_user:
             await self.update_onboarding_widget(user.id, 5, 5, "Joined VIP via Paid Link (Success)", widget_id)
+            # Clean up tracking after success
+            if hasattr(self, 'onboarding_widgets'):
+                self.onboarding_widgets.pop(user.id, None)
+            if self.db_pool:
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute("DELETE FROM bot_status WHERE status_key = $1", f"onboarding_msg_{user.id}")
+                except Exception:
+                    pass
             return
 
-        await self.update_onboarding_widget(user.id, 3, 5, "Trial Join Detected - Registering Trial...", widget_id)
+        new_widget_id = await self.update_onboarding_widget(user.id, 3, 5, "Trial Join Detected - Registering Trial...", widget_id)
+        if new_widget_id and not widget_id:
+            if not hasattr(self, 'onboarding_widgets'):
+                self.onboarding_widgets = {}
+            self.onboarding_widgets[user.id] = new_widget_id
+            widget_id = new_widget_id
 
         # Check if this user has already used their trial
         has_used_trial = user_id_str in AUTO_ROLE_CONFIG['role_history']
@@ -4009,7 +4052,7 @@ class TelegramTradingBot:
 
         # Calculate expiry time to ensure exactly 3 trading days
         expiry_time = self.calculate_trial_expiry_time(current_time)
-        await self.update_onboarding_widget(user.id, 4, 5, f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
+        widget_id = await self.update_onboarding_widget(user.id, 4, 5, f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
 
         # Determine if joined during weekend for tracking
         is_weekend = self.is_weekend_time(current_time)
@@ -4061,6 +4104,17 @@ class TelegramTradingBot:
                     f"Error recording trial activation in database: {e}")
 
         await self.update_onboarding_widget(user.id, 5, 5, f"✅ Trial Active! (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
+        
+        # Success reached, remove from memory tracking to allow fresh starts if needed
+        if hasattr(self, 'onboarding_widgets'):
+            self.onboarding_widgets.pop(user.id, None)
+            
+        if self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    await conn.execute("DELETE FROM bot_status WHERE status_key = $1", f"onboarding_msg_{user.id}")
+            except Exception:
+                pass
 
     async def get_working_api_for_pair(self, pair: str) -> str:
         pair_clean = pair.upper().replace("/",
