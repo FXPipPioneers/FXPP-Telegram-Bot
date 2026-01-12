@@ -334,7 +334,7 @@ MESSAGE_TEMPLATES = {
             "id":
             "ft_3hr",
             "message":
-            "⏰ **FINAL REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and get permanent access to our VIP Group.\n\n**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
+            "⏰ **REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and instantly regain your access to our VIP Group.\n\n**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
         }
     },
     "3/7/14 Day Follow-ups": {
@@ -975,17 +975,25 @@ class TelegramTradingBot:
             logger.error(f"Error parsing signal message: {e}")
             return None
 
-    async def update_onboarding_widget(self, user_id: int, step: int, total_steps: int, status_text: str, message_id: Optional[int] = None):
+    async def update_onboarding_widget(self,
+                                       user_id: int,
+                                       step: int,
+                                       total_steps: int,
+                                       status_text: str,
+                                       message_id: Optional[int] = None):
         """Updates a consolidated onboarding message for a specific user."""
         try:
             # If message_id is not provided, try to fetch it from memory or DB
             if not message_id:
-                message_id = getattr(self, 'onboarding_widgets', {}).get(user_id)
-            
+                message_id = getattr(self, 'onboarding_widgets',
+                                     {}).get(user_id)
+
             if not message_id and self.db_pool:
                 try:
                     async with self.db_pool.acquire() as conn:
-                        val = await conn.fetchval("SELECT status_value FROM bot_status WHERE status_key = $1", f"onboarding_msg_{user_id}")
+                        val = await conn.fetchval(
+                            "SELECT status_value FROM bot_status WHERE status_key = $1",
+                            f"onboarding_msg_{user_id}")
                         if val and val.isdigit():
                             message_id = int(val)
                 except Exception:
@@ -996,29 +1004,34 @@ class TelegramTradingBot:
             msg_text += f"📊 **Progress:** Step {step}/{total_steps}\n"
             msg_text += f"📝 **Status:** {status_text}\n"
             msg_text += f"\n👤 **User ID:** `{user_id}`"
-            
+
             # Build the button URL to open user's profile
             button_url = f"tg://user?id={user_id}"
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("👤 View User Profile", url=button_url)
-            ]])
+            keyboard = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("👤 View User Profile",
+                                       url=button_url)]])
 
             if message_id:
                 try:
-                    await self.app.edit_message_text(DEBUG_GROUP_ID, message_id, msg_text, reply_markup=keyboard)
+                    await self.app.edit_message_text(DEBUG_GROUP_ID,
+                                                     message_id,
+                                                     msg_text,
+                                                     reply_markup=keyboard)
                     return message_id
                 except Exception as e:
                     # If edit fails (e.g. message too old or deleted), send new one
                     logger.debug(f"Edit failed for widget {message_id}: {e}")
                     pass
-            
-            sent_msg = await self.app.send_message(DEBUG_GROUP_ID, msg_text, reply_markup=keyboard)
-            
+
+            sent_msg = await self.app.send_message(DEBUG_GROUP_ID,
+                                                   msg_text,
+                                                   reply_markup=keyboard)
+
             # Store the new message ID
             if not hasattr(self, 'onboarding_widgets'):
                 self.onboarding_widgets = {}
             self.onboarding_widgets[user_id] = sent_msg.id
-            
+
             if self.db_pool:
                 try:
                     async with self.db_pool.acquire() as conn:
@@ -1028,7 +1041,7 @@ class TelegramTradingBot:
                             f"onboarding_msg_{user_id}", str(sent_msg.id))
                 except Exception:
                     pass
-                    
+
             return sent_msg.id
         except Exception as e:
             logger.error(f"Failed to update onboarding widget: {e}")
@@ -1104,37 +1117,38 @@ class TelegramTradingBot:
         # Saturday = 5, Sunday = 6
         if join_time.weekday() >= 5:
             days_to_monday = 7 - join_time.weekday()
-            start_time = (join_time + timedelta(days=days_to_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            start_time = (join_time + timedelta(days=days_to_monday)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
         else:
             start_time = join_time
 
         # We need to add 72 hours of "trading time"
         hours_to_add = 72
         current_time = start_time
-        
+
         # Move forward hour by hour (or day by day for efficiency) to find the expiration
         # However, for 3 days (72 hours), the logic is simple:
         # If we add 3 days and hit a weekend, we shift by 2 days.
-        
+
         # Simple skip-weekend logic for exactly 72 hours:
         # Day 1: 24h, Day 2: 24h, Day 3: 24h.
         expiry_time = start_time + timedelta(days=3)
-        
+
         # If the 3-day span crosses a weekend, add 2 days (48 hours)
-        # Weekends are Sat/Sun. 
+        # Weekends are Sat/Sun.
         # If join Mon -> Thu (No weekend)
         # If join Tue -> Fri (No weekend)
         # If join Wed -> Sat -> shift to Mon
         # If join Thu -> Sun -> shift to Tue
         # If join Fri -> Mon -> shift to Wed
-        
+
         # Check how many weekend days are in the range
         temp_time = start_time
         while temp_time < expiry_time:
-            if temp_time.weekday() >= 5: # Sat or Sun
+            if temp_time.weekday() >= 5:  # Sat or Sun
                 expiry_time += timedelta(days=1)
             temp_time += timedelta(days=1)
-            
+
         # Final check if the resulting expiry_time itself lands on a weekend
         while expiry_time.weekday() >= 5:
             expiry_time += timedelta(days=1)
@@ -2637,12 +2651,14 @@ class TelegramTradingBot:
             await self._show_free_group_joiners(callback_query, week_offset=0)
         elif data.startswith("nml_free_group_prev_"):
             offset = int(data.split("_")[-1])
-            await self._show_free_group_joiners(callback_query, week_offset=offset)
+            await self._show_free_group_joiners(callback_query,
+                                                week_offset=offset)
         elif data == "nml_vip_trial":
             await self._show_vip_trial_joiners(callback_query, week_offset=0)
         elif data.startswith("nml_vip_trial_prev_"):
             offset = int(data.split("_")[-1])
-            await self._show_vip_trial_joiners(callback_query, week_offset=offset)
+            await self._show_vip_trial_joiners(callback_query,
+                                               week_offset=offset)
         elif data == "nml_back":
             # Re-show the main menu
             keyboard = InlineKeyboardMarkup(
@@ -2653,7 +2669,8 @@ class TelegramTradingBot:
                  [
                      InlineKeyboardButton("⭐ VIP Trial Joiners",
                                           callback_data="nml_vip_trial")
-                 ], [InlineKeyboardButton("❌ Close", callback_data="nml_close")]])
+                 ],
+                 [InlineKeyboardButton("❌ Close", callback_data="nml_close")]])
 
             await callback_query.message.edit_text(
                 "**New Members Tracking**\n\n"
@@ -2663,7 +2680,9 @@ class TelegramTradingBot:
                 reply_markup=keyboard)
             await callback_query.answer()
 
-    async def _show_free_group_joiners(self, callback_query: CallbackQuery, week_offset: int = 0):
+    async def _show_free_group_joiners(self,
+                                       callback_query: CallbackQuery,
+                                       week_offset: int = 0):
         """Show free group joiners grouped by week with daily and weekly totals"""
         if not self.db_pool:
             await callback_query.message.edit_text("❌ Database not available")
@@ -2672,17 +2691,15 @@ class TelegramTradingBot:
 
         try:
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-            monday = (current_time - timedelta(days=current_time.weekday())) - timedelta(weeks=week_offset)
-            sunday = monday + timedelta(days=6)
-
-            # Ensure sunday is the end of the day for the query
-            sunday_end = sunday.replace(hour=23, minute=59, second=59)
+            monday = (current_time - timedelta(days=current_time.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            monday = monday - timedelta(weeks=week_offset)
+            sunday = (monday + timedelta(days=6)).replace(hour=23, minute=59, second=59, microsecond=999999)
 
             async with self.db_pool.acquire() as conn:
                 joins = await conn.fetch(
                     '''SELECT user_id, joined_at FROM free_group_joins 
                        WHERE joined_at >= $1 AND joined_at <= $2
-                       ORDER BY joined_at DESC''', monday, sunday_end)
+                       ORDER BY joined_at DESC''', monday, sunday)
 
             week_label = "This Week" if week_offset == 0 else f"{week_offset} Week(s) Ago"
             header = f"**Free Group Joiners - {week_label}**\n\nMonday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}\n"
@@ -2705,10 +2722,16 @@ class TelegramTradingBot:
                     daily_count = len(joiners_by_date[date])
                     text += f"**{date}** ({daily_count}): {users}\n"
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Previous Week", callback_data=f"nml_free_group_prev_{week_offset + 1}")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="nml_back")]
-            ])
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "⬅️ Previous Week",
+                    callback_data=f"nml_free_group_prev_{week_offset + 1}")
+            ],
+                                             [
+                                                 InlineKeyboardButton(
+                                                     "🔙 Back to Menu",
+                                                     callback_data="nml_back")
+                                             ]])
 
             await callback_query.message.edit_text(text, reply_markup=keyboard)
             await callback_query.answer()
@@ -2717,7 +2740,9 @@ class TelegramTradingBot:
             await callback_query.message.edit_text(f"❌ Error: {str(e)}")
             await callback_query.answer()
 
-    async def _show_vip_trial_joiners(self, callback_query: CallbackQuery, week_offset: int = 0):
+    async def _show_vip_trial_joiners(self,
+                                      callback_query: CallbackQuery,
+                                      week_offset: int = 0):
         """Show all active VIP trial members with time remaining and join dates"""
         if not self.db_pool:
             await callback_query.message.edit_text("❌ Database not available")
@@ -2726,9 +2751,9 @@ class TelegramTradingBot:
 
         try:
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
-            monday = (current_time - timedelta(days=current_time.weekday())) - timedelta(weeks=week_offset)
-            sunday = monday + timedelta(days=6)
-            sunday_end = sunday.replace(hour=23, minute=59, second=59)
+            monday = (current_time - timedelta(days=current_time.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            monday = monday - timedelta(weeks=week_offset)
+            sunday = (monday + timedelta(days=6)).replace(hour=23, minute=59, second=59, microsecond=999999)
 
             date_range_str = f"Monday {monday.strftime('%d-%m-%Y')} to Sunday {sunday.strftime('%d-%m-%Y')}"
             week_label = "This Week" if week_offset == 0 else f"{week_offset} Week(s) Ago"
@@ -2736,12 +2761,13 @@ class TelegramTradingBot:
             async with self.db_pool.acquire() as conn:
                 # Direct database fetch to ensure we have the latest data
                 # Filter by those who joined in the specified week
-                active_members = await conn.fetch("""
+                active_members = await conn.fetch(
+                    """
                     SELECT member_id, role_added_time, expiry_time 
                     FROM active_members 
                     WHERE role_added_time >= $1 AND role_added_time <= $2
                     ORDER BY role_added_time DESC
-                """, monday, sunday_end)
+                """, monday, sunday)
 
             header = f"**Active VIP Trial Members - {week_label}**\n\n{date_range_str}\n"
 
@@ -2752,9 +2778,12 @@ class TelegramTradingBot:
             for row in active_members:
                 user_id = row['member_id']
                 expiry = row['expiry_time']
-                if expiry and expiry.tzinfo is None:
-                    expiry = AMSTERDAM_TZ.localize(expiry)
-                elif not expiry:
+                if expiry:
+                    if expiry.tzinfo is None:
+                        expiry = AMSTERDAM_TZ.localize(expiry)
+                    else:
+                        expiry = expiry.astimezone(AMSTERDAM_TZ)
+                else:
                     # Fallback if expiry is missing
                     expiry = current_time
 
@@ -2789,21 +2818,30 @@ class TelegramTradingBot:
                 text = header + f"**📊 Total This Week: {total_weekly} members**\n\n"
 
                 for date in sorted(joiners_by_date.keys(), reverse=True):
-                    daily_trials = [t for t in trials_with_time if t['join_date'] == date]
+                    daily_trials = [
+                        t for t in trials_with_time if t['join_date'] == date
+                    ]
                     daily_count = len(daily_trials)
-                    
+
                     users_text = []
                     for t in daily_trials:
                         hours = int(t['total_seconds'] // 3600)
                         minutes = int((t['total_seconds'] % 3600) // 60)
-                        users_text.append(f"User {t['user_id']} ({hours}h {minutes}m)")
-                    
+                        users_text.append(
+                            f"User {t['user_id']} ({hours}h {minutes}m)")
+
                     text += f"**{date}** ({daily_count}): {', '.join(users_text)}\n"
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Previous Week", callback_data=f"nml_vip_trial_prev_{week_offset + 1}")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="nml_back")]
-            ])
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "⬅️ Previous Week",
+                    callback_data=f"nml_vip_trial_prev_{week_offset + 1}")
+            ],
+                                             [
+                                                 InlineKeyboardButton(
+                                                     "🔙 Back to Menu",
+                                                     callback_data="nml_back")
+                                             ]])
 
             await callback_query.message.edit_text(text, reply_markup=keyboard)
             await callback_query.answer()
@@ -3836,7 +3874,10 @@ class TelegramTradingBot:
             )
 
             widget_id = getattr(self, 'onboarding_widgets', {}).get(user_id)
-            await self.update_onboarding_widget(user_id, 3, 5, "VIP Join Request Approved - waiting for user to enter chat...", widget_id)
+            await self.update_onboarding_widget(
+                user_id, 3, 5,
+                "VIP Join Request Approved - waiting for user to enter chat...",
+                widget_id)
         except Exception as e:
             logger.error(
                 f"❌ Error processing join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}"
@@ -3875,7 +3916,8 @@ class TelegramTradingBot:
 
     async def handle_free_group_join(self, client: Client, user):
         # Initialize onboarding widget - 5 steps now
-        widget_id = await self.update_onboarding_widget(user.id, 1, 5, "Joined FREE Group - Waiting 10m for Welcome DM")
+        widget_id = await self.update_onboarding_widget(
+            user.id, 1, 5, "Joined FREE Group - Waiting 10m for Welcome DM")
         if widget_id:
             if not hasattr(self, 'onboarding_widgets'):
                 self.onboarding_widgets = {}
@@ -3907,7 +3949,9 @@ class TelegramTradingBot:
 
             if not tracking_enabled:
                 if widget_id:
-                    await self.update_onboarding_widget(user.id, 1, 5, "Joined FREE Group (Tracking Disabled)", widget_id)
+                    await self.update_onboarding_widget(
+                        user.id, 1, 5, "Joined FREE Group (Tracking Disabled)",
+                        widget_id)
                 return
 
             if self.db_pool:
@@ -3930,7 +3974,8 @@ class TelegramTradingBot:
             error_msg = f"❌ Error tracking free group join for {user.id}: {e}"
             logger.error(error_msg)
             if tracking_enabled:
-                await self.update_onboarding_widget(user.id, 1, 4, f"Error: {e}", widget_id)
+                await self.update_onboarding_widget(user.id, 1, 4,
+                                                    f"Error: {e}", widget_id)
 
     async def show_member_db_widget(self, message):
         async with self.db_pool.acquire() as conn:
@@ -3997,7 +4042,8 @@ class TelegramTradingBot:
                     if val == 'false':
                         tracking_enabled = False
             except Exception as e:
-                logger.error(f"Error checking tracking status in VIP join: {e}")
+                logger.error(
+                    f"Error checking tracking status in VIP join: {e}")
 
         # Record participation for /newmemberslist regardless of tracking (tracking only affects automated DMs)
         # unless user is in brand deal mode where they want zero logs.
@@ -4015,19 +4061,24 @@ class TelegramTradingBot:
 
         # If not trial user, don't register - they're paying members
         if not is_trial_user:
-            await self.update_onboarding_widget(user.id, 5, 5, "Joined VIP via Paid Link (Success)", widget_id)
+            await self.update_onboarding_widget(
+                user.id, 5, 5, "Joined VIP via Paid Link (Success)", widget_id)
             # Clean up tracking after success
             if hasattr(self, 'onboarding_widgets'):
                 self.onboarding_widgets.pop(user.id, None)
             if self.db_pool:
                 try:
                     async with self.db_pool.acquire() as conn:
-                        await conn.execute("DELETE FROM bot_status WHERE status_key = $1", f"onboarding_msg_{user.id}")
+                        await conn.execute(
+                            "DELETE FROM bot_status WHERE status_key = $1",
+                            f"onboarding_msg_{user.id}")
                 except Exception:
                     pass
             return
 
-        new_widget_id = await self.update_onboarding_widget(user.id, 3, 5, "Trial Join Detected - Registering Trial...", widget_id)
+        new_widget_id = await self.update_onboarding_widget(
+            user.id, 3, 5, "Trial Join Detected - Registering Trial...",
+            widget_id)
         if new_widget_id and not widget_id:
             if not hasattr(self, 'onboarding_widgets'):
                 self.onboarding_widgets = {}
@@ -4061,13 +4112,16 @@ class TelegramTradingBot:
                 db_check_failed = True
 
         if db_check_failed:
-            await self.update_onboarding_widget(user.id, 3, 5, "DB check failed (allowing access anyway)", widget_id)
+            await self.update_onboarding_widget(
+                user.id, 3, 5, "DB check failed (allowing access anyway)",
+                widget_id)
 
         # If user already used trial once, they shouldn't have gotten past join request approval
         # But as a safety check if they somehow made it here, send them a message and log it
         if has_used_trial:
             if tracking_enabled:
-                await self.update_onboarding_widget(user.id, 3, 5, "❌ Rejected: Trial used before", widget_id)
+                await self.update_onboarding_widget(
+                    user.id, 3, 5, "❌ Rejected: Trial used before", widget_id)
 
             try:
                 rejection_dm = MESSAGE_TEMPLATES["Trial Status & Expiry"][
@@ -4085,8 +4139,11 @@ class TelegramTradingBot:
         # Calculate expiry time to ensure exactly 3 trading days
         expiry_time = self.calculate_trial_expiry_time(current_time)
         if tracking_enabled:
-            widget_id = await self.update_onboarding_widget(user.id, 4, 5, f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
-        
+            widget_id = await self.update_onboarding_widget(
+                user.id, 4, 5,
+                f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})",
+                widget_id)
+
         # Determine if joined during weekend for tracking
         is_weekend = self.is_weekend_time(current_time)
 
@@ -4107,7 +4164,7 @@ class TelegramTradingBot:
                     exists = await conn.fetchval(
                         "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Started' AND status = 'pending'",
                         user.id)
-                    
+
                     if not exists:
                         await conn.execute(
                             "INSERT INTO userbot_dm_queue (user_id, message_text, label, status, created_at) VALUES ($1, $2, 'Trial Started', 'pending', $3)",
@@ -4118,7 +4175,8 @@ class TelegramTradingBot:
             'expiry_time': expiry_time.isoformat(),
             'weekend_delayed': is_weekend,
             'chat_id': VIP_GROUP_ID,
-            'role_added_time': current_time.isoformat() # Added for /newmemberslist compatibility
+            'role_added_time':
+            current_time.isoformat()  # Added for /newmemberslist compatibility
         }
 
         AUTO_ROLE_CONFIG['role_history'][user_id_str] = {
@@ -4145,16 +4203,21 @@ class TelegramTradingBot:
                     f"Error recording trial activation in database: {e}")
 
         if tracking_enabled:
-            await self.update_onboarding_widget(user.id, 5, 5, f"✅ Trial Active! (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
-        
+            await self.update_onboarding_widget(
+                user.id, 5, 5,
+                f"✅ Trial Active! (Expires {expiry_time.strftime('%a %H:%M')})",
+                widget_id)
+
         # Success reached, remove from memory tracking to allow fresh starts if needed
         if hasattr(self, 'onboarding_widgets'):
             self.onboarding_widgets.pop(user.id, None)
-            
+
         if self.db_pool:
             try:
                 async with self.db_pool.acquire() as conn:
-                    await conn.execute("DELETE FROM bot_status WHERE status_key = $1", f"onboarding_msg_{user.id}")
+                    await conn.execute(
+                        "DELETE FROM bot_status WHERE status_key = $1",
+                        f"onboarding_msg_{user.id}")
             except Exception:
                 pass
 
@@ -5369,8 +5432,9 @@ class TelegramTradingBot:
 
         try:
             async with self.db_pool.acquire() as conn:
+                # Ensure status is explicitly 'active' for query consistency
                 rows = await conn.fetch(
-                    "SELECT * FROM active_trades WHERE status = 'active'")
+                    "SELECT * FROM active_trades WHERE status IN ('active', 'pending_entry')")
 
                 for row in rows:
                     trade_key = row['message_id']
@@ -6387,6 +6451,8 @@ class TelegramTradingBot:
                     expiry_time = datetime.fromisoformat(data['expiry_time'])
                     if expiry_time.tzinfo is None:
                         expiry_time = AMSTERDAM_TZ.localize(expiry_time)
+                    else:
+                        expiry_time = expiry_time.astimezone(AMSTERDAM_TZ)
 
                     time_until_expiry = expiry_time - current_time
                     hours_left = time_until_expiry.total_seconds() / 3600
@@ -6581,21 +6647,29 @@ class TelegramTradingBot:
                 if self.db_pool:
                     async with self.db_pool.acquire() as conn:
                         # Find any pending widget status updates
-                        status_updates = await conn.fetch("SELECT setting_key, setting_value FROM bot_settings WHERE setting_key LIKE 'widget_status_%'")
+                        status_updates = await conn.fetch(
+                            "SELECT setting_key, setting_value FROM bot_settings WHERE setting_key LIKE 'widget_status_%'"
+                        )
                         for update in status_updates:
                             try:
-                                user_id = int(update['setting_key'].replace('widget_status_', ''))
+                                user_id = int(update['setting_key'].replace(
+                                    'widget_status_', ''))
                                 status_text = update['setting_value']
-                                
-                                widget_id = getattr(self, 'onboarding_widgets', {}).get(user_id)
+
+                                widget_id = getattr(self, 'onboarding_widgets',
+                                                    {}).get(user_id)
                                 if widget_id:
                                     # Update to Step 2/5 (Welcome DM Status)
-                                    await self.update_onboarding_widget(user_id, 2, 5, status_text, widget_id)
-                                    
+                                    await self.update_onboarding_widget(
+                                        user_id, 2, 5, status_text, widget_id)
+
                                 # Clear the update after processing
-                                await conn.execute("DELETE FROM bot_settings WHERE setting_key = $1", update['setting_key'])
+                                await conn.execute(
+                                    "DELETE FROM bot_settings WHERE setting_key = $1",
+                                    update['setting_key'])
                             except Exception as e:
-                                logger.error(f"Error processing widget update: {e}")
+                                logger.error(
+                                    f"Error processing widget update: {e}")
             except Exception as e:
                 logger.error(f"Error in welcome dm status loop: {e}")
             await asyncio.sleep(30)
@@ -6607,6 +6681,13 @@ class TelegramTradingBot:
                 await self.db_pool_future
             except Exception as e:
                 logger.error(f"Failed to initialize database pool: {e}")
+
+        # Double check that active trades are loaded after pool is definitely ready
+        if self.db_pool:
+            try:
+                await self.load_active_trades_from_db()
+            except Exception as e:
+                logger.error(f"Post-startup trade loading failed: {e}")
 
         await self.app.start()
         logger.info("Telegram bot started!")

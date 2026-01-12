@@ -208,7 +208,8 @@ class UserbotService:
                                         "ALTER TABLE userbot_dm_queue ADD COLUMN last_retry_at TIMESTAMP WITH TIME ZONE"
                                     )
                                     logger.info(
-                                        "✅ Added missing 'last_retry_at' column")
+                                        "✅ Added missing 'last_retry_at' column"
+                                    )
                             except Exception as e:
                                 logger.error(
                                     f"Error adding last_retry_at column: {e}")
@@ -539,12 +540,15 @@ class UserbotService:
                 for group_id in [FREE_GROUP_ID, VIP_GROUP_ID]:
                     if group_id != 0:
                         try:
-                            await self.client.get_chat_member(group_id, user_id)
-                            break # Found them, peer is now cached
+                            await self.client.get_chat_member(
+                                group_id, user_id)
+                            break  # Found them, peer is now cached
                         except:
                             continue
             except Exception as peer_err:
-                logger.debug(f"Peer pre-resolution attempt for {user_id} failed: {peer_err}")
+                logger.debug(
+                    f"Peer pre-resolution attempt for {user_id} failed: {peer_err}"
+                )
 
             await asyncio.sleep(random.randint(5, 15))
             await self.client.send_message(user_id, message)
@@ -555,7 +559,9 @@ class UserbotService:
                 f"❌ Privacy Violation: Cannot message {user_id} ({label})")
             return False
         except PeerIdInvalid:
-            logger.warning(f"Peer ID Invalid for {user_id} ({label}) - will retry if queued")
+            logger.warning(
+                f"Peer ID Invalid for {user_id} ({label}) - will retry if queued"
+            )
             return False
         except FloodWait as e:
             wait_time = float(
@@ -567,9 +573,10 @@ class UserbotService:
             err_msg = str(e)
             if "PEER_FLOOD" in err_msg:
                 # Account limited - stop loop briefly and log once
-                logger.error(f"❌ Account Limited (PEER_FLOOD): {user_id} ({label})")
+                logger.error(
+                    f"❌ Account Limited (PEER_FLOOD): {user_id} ({label})")
                 return False
-            
+
             await self.log_to_debug(
                 f"❌ Failed to send {label} to {user_id}: {e}")
             return False
@@ -593,11 +600,18 @@ class UserbotService:
                             today_str = current_time.strftime('%Y-%m-%d')
 
                             if last_global_offer != today_str:
-                                await conn.execute("ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS last_daily_offer_at TIMESTAMP WITH TIME ZONE")
-                                await conn.execute("ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS ever_in_vip BOOLEAN DEFAULT FALSE")
-                                await conn.execute("ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS daily_offer_count INTEGER DEFAULT 0")
+                                await conn.execute(
+                                    "ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS last_daily_offer_at TIMESTAMP WITH TIME ZONE"
+                                )
+                                await conn.execute(
+                                    "ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS ever_in_vip BOOLEAN DEFAULT FALSE"
+                                )
+                                await conn.execute(
+                                    "ALTER TABLE peer_id_checks ADD COLUMN IF NOT EXISTS daily_offer_count INTEGER DEFAULT 0"
+                                )
 
-                                pending_trial_users = await conn.fetch("""
+                                pending_trial_users = await conn.fetch(
+                                    """
                                     SELECT p.user_id 
                                     FROM peer_id_checks p
                                     LEFT JOIN active_members a ON p.user_id = a.member_id
@@ -613,73 +627,108 @@ class UserbotService:
                                     user_id = row['user_id']
                                     exists = await conn.fetchval(
                                         "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Daily Trial Offer' AND created_at > $2",
-                                        user_id, current_time - timedelta(hours=23))
+                                        user_id,
+                                        current_time - timedelta(hours=23))
                                     if not exists:
                                         msg = "Want to try our VIP Group for FREE?\n\nWe're offering a 3-day free trial (excluding the weekend) of our VIP Group where you'll receive 6+ high-quality trade signals per day.\n\nYour free trial will automatically be activated once you join our VIP group through this link: https://t.me/+5X18tTjgM042ODU0"
-                                        start_time = max(current_time, current_time.replace(hour=8, minute=0, second=0))
-                                        end_time = current_time.replace(hour=12, minute=0, second=0)
-                                        
-                                        if end_time > start_time + timedelta(minutes=30):
-                                            total_seconds = (end_time - start_time).total_seconds()
-                                            scheduled_time = start_time + timedelta(seconds=random.randint(0, int(total_seconds)))
+                                        start_time = max(
+                                            current_time,
+                                            current_time.replace(hour=8,
+                                                                 minute=0,
+                                                                 second=0))
+                                        end_time = current_time.replace(
+                                            hour=12, minute=0, second=0)
+
+                                        if end_time > start_time + timedelta(
+                                                minutes=30):
+                                            total_seconds = (
+                                                end_time -
+                                                start_time).total_seconds()
+                                            scheduled_time = start_time + timedelta(
+                                                seconds=random.randint(
+                                                    0, int(total_seconds)))
                                         else:
                                             scheduled_time = current_time
 
-                                        await conn.execute("""
+                                        await conn.execute(
+                                            """
                                             INSERT INTO userbot_dm_queue 
                                             (user_id, message_text, label, status, created_at) 
                                             VALUES ($1, $2, 'Daily Trial Offer', 'pending', $3)
                                         """, user_id, msg, scheduled_time)
 
-                                        await conn.execute("""
+                                        await conn.execute(
+                                            """
                                             UPDATE peer_id_checks 
                                             SET last_daily_offer_at = $1, 
                                                 daily_offer_count = daily_offer_count + 1 
                                             WHERE user_id = $2
                                         """, current_time, user_id)
-                                        await self.log_to_debug(f"📅 Scheduled Daily Trial Offer for {user_id} at {scheduled_time.strftime('%H:%M')}")
+                                        await self.log_to_debug(
+                                            f"📅 Scheduled Daily Trial Offer for {user_id} at {scheduled_time.strftime('%H:%M')}"
+                                        )
 
-                                await conn.execute("INSERT INTO bot_settings (setting_key, setting_value) VALUES ('last_9am_offer_run', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", today_str)
+                                await conn.execute(
+                                    "INSERT INTO bot_settings (setting_key, setting_value) VALUES ('last_9am_offer_run', $1) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
+                                    today_str)
                 except Exception as e:
                     logger.error(f"Error in Daily Offer block: {e}")
 
                 # 2. Handle Trial Expiry Warnings (Queueing only)
                 try:
                     async with self.db_pool.acquire() as conn:
-                        active_members = await conn.fetch("SELECT member_id, expiry_time FROM active_members")
+                        active_members = await conn.fetch(
+                            "SELECT member_id, expiry_time FROM active_members"
+                        )
                         for member in active_members:
                             member_id = member['member_id']
                             expiry_time = member['expiry_time']
                             if expiry_time.tzinfo is None:
-                                expiry_time = AMSTERDAM_TZ.localize(expiry_time)
+                                expiry_time = AMSTERDAM_TZ.localize(
+                                    expiry_time)
 
                             time_left = expiry_time - current_time
-                            
+
                             # 24h Warning
-                            if timedelta(hours=23) <= time_left <= timedelta(hours=25):
-                                exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '24h_warning' AND created_at > $2",
-                                                           member_id, current_time - timedelta(hours=24))
+                            if timedelta(hours=23) <= time_left <= timedelta(
+                                    hours=25):
+                                exists = await conn.fetchval(
+                                    "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '24h_warning' AND created_at > $2",
+                                    member_id,
+                                    current_time - timedelta(hours=24))
                                 if not exists:
                                     msg = "⏰ **REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in 24 hours**.\n\nAfter that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
-                                    await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '24h_warning', 'pending')", member_id, msg)
+                                    await conn.execute(
+                                        "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '24h_warning', 'pending')",
+                                        member_id, msg)
 
                             # 3h Warning
-                            if timedelta(hours=2) <= time_left <= timedelta(hours=4):
-                                exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '3h_warning' AND created_at > $2",
-                                                           member_id, current_time - timedelta(hours=24))
+                            if timedelta(hours=2) <= time_left <= timedelta(
+                                    hours=4):
+                                exists = await conn.fetchval(
+                                    "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '3h_warning' AND created_at > $2",
+                                    member_id,
+                                    current_time - timedelta(hours=24))
                                 if not exists:
-                                    msg = "⏰ **FINAL REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and get permanent access to our VIP Group.\n\n**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
-                                    await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '3h_warning', 'pending')", member_id, msg)
+                                    msg = "⏰ **REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and instantly regain your access to our VIP Group.\n\n**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
+                                    await conn.execute(
+                                        "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, '3h_warning', 'pending')",
+                                        member_id, msg)
 
                         # Handle Trial Expiration queueing
-                        expired = await conn.fetch("SELECT member_id FROM active_members WHERE expiry_time <= $1", current_time)
+                        expired = await conn.fetch(
+                            "SELECT member_id FROM active_members WHERE expiry_time <= $1",
+                            current_time)
                         for member in expired:
                             member_id = member['member_id']
-                            exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Expired' AND created_at > $2",
-                                                       member_id, current_time - timedelta(hours=1))
+                            exists = await conn.fetchval(
+                                "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Expired' AND created_at > $2",
+                                member_id, current_time - timedelta(hours=1))
                             if not exists:
                                 msg = "Hey! Your **3-day free trial (excluding the weekend)** to the VIP Group has unfortunately **ran out**. We truly hope you were able to benefit with us & we hope to see you back soon! For now, feel free to continue following our trade signals in our Free Group: https://t.me/fxpippioneers\n\n**Want to rejoin the VIP Group? You can regain access through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
-                                await conn.execute("INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, 'Trial Expired', 'pending')", member_id, msg)
+                                await conn.execute(
+                                    "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, 'Trial Expired', 'pending')",
+                                    member_id, msg)
                 except Exception as e:
                     logger.error(f"Error in Expiry Warning block: {e}")
 
@@ -687,25 +736,36 @@ class UserbotService:
                 try:
                     followups = []
                     async with self.db_pool.acquire() as conn:
-                        followups = await conn.fetch("SELECT member_id, role_expired, dm_3_sent, dm_7_sent, dm_14_sent FROM dm_schedule")
-                    
+                        followups = await conn.fetch(
+                            "SELECT member_id, role_expired, dm_3_sent, dm_7_sent, dm_14_sent FROM dm_schedule"
+                        )
+
                     for f in followups:
                         m_id = f['member_id']
                         expired_at = f['role_expired']
-                        if expired_at.tzinfo is None: expired_at = AMSTERDAM_TZ.localize(expired_at)
+                        if expired_at.tzinfo is None:
+                            expired_at = AMSTERDAM_TZ.localize(expired_at)
                         days_since = (current_time - expired_at).days
 
-                        for days, flag in [(3, 'dm_3_sent'), (7, 'dm_7_sent'), (14, 'dm_14_sent')]:
+                        for days, flag in [(3, 'dm_3_sent'), (7, 'dm_7_sent'),
+                                           (14, 'dm_14_sent')]:
                             if days_since >= days and not f[flag]:
                                 msg_templates = {
-                                    3: "Hey! It's been 3 days since your **3-day free trial (excluding the weekend)** ended. We truly hope you got value from the **20+ trading signals** you received during that time.\n\nAs you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\nWe'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/",
-                                    7: "It's been a week since your **3-day free trial (excluding the weekend)** ended. Since then, our **VIP members have been catching trade setups daily in the VIP Group**.\n\nIf you found value in just 3 days, imagine what results you could've been seeing by now with full access. It's all about **consistency and staying connected to the right information**.\n\nWe'd like to **personally invite you to rejoin the VIP Group** and get back into the rhythm.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/",
-                                    14: "Hey! It's been two weeks since your **3-day free trial (excluding the weekend)** ended. We hope you've stayed active since then.\n\nIf you've been trading solo or passively following the free channel, you might be feeling the difference. In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. That edge can make all the difference over time.\n\nWe'd love to **invite you back into the VIP Group** and help you start compounding results again.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
+                                    3:
+                                    "Hey! It's been 3 days since your **3-day free trial (excluding the weekend)** ended. We truly hope you got value from the **20+ trading signals** you received during that time.\n\nAs you've probably seen, our free signals channel gets **1 free signal per day**, while our **VIP members** in the VIP Group receive **6+ high-quality signals per day**. That means that our VIP Group offers way more chances to profit and grow consistently.\n\nWe'd love to **invite you back to the VIP Group,** so you don't miss out on more solid opportunities.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/",
+                                    7:
+                                    "It's been a week since your **3-day free trial (excluding the weekend)** ended. Since then, our **VIP members have been catching trade setups daily in the VIP Group**.\n\nIf you found value in just 3 days, imagine what results you could've been seeing by now with full access. It's all about **consistency and staying connected to the right information**.\n\nWe'd like to **personally invite you to rejoin the VIP Group** and get back into the rhythm.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/",
+                                    14:
+                                    "Hey! It's been two weeks since your **3-day free trial (excluding the weekend)** ended. We hope you've stayed active since then.\n\nIf you've been trading solo or passively following the free channel, you might be feeling the difference. In the VIP Group, it's not just about more signals. It's about the **structure, support, and smarter decision-making**. That edge can make all the difference over time.\n\nWe'd love to **invite you back into the VIP Group** and help you start compounding results again.\n\n**Feel free to join us again through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
                                 }
-                                success = await self.send_dm(m_id, msg_templates[days], f"{days}-Day Follow-up")
+                                success = await self.send_dm(
+                                    m_id, msg_templates[days],
+                                    f"{days}-Day Follow-up")
                                 if success:
                                     async with self.db_pool.acquire() as conn:
-                                        await conn.execute(f"UPDATE dm_schedule SET {flag} = TRUE WHERE member_id = $1", m_id)
+                                        await conn.execute(
+                                            f"UPDATE dm_schedule SET {flag} = TRUE WHERE member_id = $1",
+                                            m_id)
                 except Exception as e:
                     logger.error(f"Error in Retention Follow-up block: {e}")
 
@@ -713,18 +773,24 @@ class UserbotService:
                 try:
                     joins = []
                     async with self.db_pool.acquire() as conn:
-                        joins = await conn.fetch('SELECT user_id, joined_at FROM free_group_joins WHERE discount_sent = FALSE')
-                    
+                        joins = await conn.fetch(
+                            'SELECT user_id, joined_at FROM free_group_joins WHERE discount_sent = FALSE'
+                        )
+
                     for j in joins:
                         if current_time >= j['joined_at'] + timedelta(days=30):
                             async with self.db_pool.acquire() as conn:
-                                reaction_count = await conn.fetchval('SELECT COUNT(DISTINCT message_id) FROM emoji_reactions WHERE user_id = $1 AND reaction_time > $2',
-                                                                   j['user_id'], j['joined_at'])
+                                reaction_count = await conn.fetchval(
+                                    'SELECT COUNT(DISTINCT message_id) FROM emoji_reactions WHERE user_id = $1 AND reaction_time > $2',
+                                    j['user_id'], j['joined_at'])
                             if reaction_count >= 5:
                                 msg = "Hey! 👋 We noticed that you've been engaging with our signals in the Free Group. We want to say that we truly appreciate it!\n\nAs a form of appreciation for your loyalty and engagement, we want to give you something special: **an exclusive 50% discount for access to our VIP Group.**\n\n**Your exclusive discount code is:** `Thank_You!50!`\n\n**You can upgrade to VIP and apply your discount code here:** https://whop.com/gold-pioneer/gold-pioneer/"
-                                if await self.send_dm(j['user_id'], msg, "Engagement Discount"):
+                                if await self.send_dm(j['user_id'], msg,
+                                                      "Engagement Discount"):
                                     async with self.db_pool.acquire() as conn:
-                                        await conn.execute('UPDATE free_group_joins SET discount_sent = TRUE WHERE user_id = $1', j['user_id'])
+                                        await conn.execute(
+                                            'UPDATE free_group_joins SET discount_sent = TRUE WHERE user_id = $1',
+                                            j['user_id'])
                 except Exception as e:
                     logger.error(f"Error in Engagement Tracking block: {e}")
 
@@ -733,12 +799,17 @@ class UserbotService:
                     if current_time.weekday() == 0 and current_time.hour <= 1:
                         delayed = []
                         async with self.db_pool.acquire() as conn:
-                            delayed = await conn.fetch("SELECT member_id FROM active_members WHERE weekend_delayed = TRUE AND NOT monday_notification_sent")
+                            delayed = await conn.fetch(
+                                "SELECT member_id FROM active_members WHERE weekend_delayed = TRUE AND NOT monday_notification_sent"
+                            )
                         for d in delayed:
                             msg = "Hey! The weekend is over, so the trading markets have been opened again. That means your **3-day free trial (excluding the weekend)** has officially started."
-                            if await self.send_dm(d['member_id'], msg, "Monday Activation"):
+                            if await self.send_dm(d['member_id'], msg,
+                                                  "Monday Activation"):
                                 async with self.db_pool.acquire() as conn:
-                                    await conn.execute("UPDATE active_members SET monday_notification_sent = TRUE WHERE member_id = $1", d['member_id'])
+                                    await conn.execute(
+                                        "UPDATE active_members SET monday_notification_sent = TRUE WHERE member_id = $1",
+                                        d['member_id'])
                 except Exception as e:
                     logger.error(f"Error in Monday Activation block: {e}")
 
@@ -753,83 +824,127 @@ class UserbotService:
                             WHERE status = 'pending' AND abandoned = FALSE 
                             ORDER BY created_at ASC LIMIT 10
                         """)
-                    
+
                     for row in queued_dms:
                         row_id = row['id']
                         u_id = row['user_id']
                         label = row['label']
                         retries = row['retry_count']
                         last_retry = row['last_retry_at']
-                        
+
                         # 1. 10-minute initial delay for Welcome DMs
                         if label == 'Welcome DM':
                             join_time = row['created_at']
-                            if join_time.tzinfo is None: join_time = AMSTERDAM_TZ.localize(join_time)
-                            if current_time < join_time + timedelta(minutes=10): continue
+                            if join_time.tzinfo is None:
+                                join_time = AMSTERDAM_TZ.localize(join_time)
+                            if current_time < join_time + timedelta(
+                                    minutes=10):
+                                continue
 
                         # 2. Tiered Retry Logic
                         # Phase 1: First 3 tries (Immediate/Sequential)
                         # Phase 2: After 3 tries, wait 30 minutes, then 3 more tries
                         # Phase 3: After 6 tries, wait 3.5 hours, then 3 final tries
                         # Total max tries: 9
-                        
+
                         can_retry = False
                         if retries == 0:
                             can_retry = True
                         elif retries < 3:
                             # Try every minute (default loop interval)
-                            can_retry = True 
+                            can_retry = True
                         elif 3 <= retries < 6:
                             # 30-minute pause after 3rd try
-                            if last_retry and current_time >= last_retry + timedelta(minutes=30):
+                            if last_retry and current_time >= last_retry + timedelta(
+                                    minutes=30):
                                 can_retry = True
                         elif 6 <= retries < 9:
                             # 3.5-hour pause after 6th try
-                            if last_retry and current_time >= last_retry + timedelta(hours=3.5):
+                            if last_retry and current_time >= last_retry + timedelta(
+                                    hours=3.5):
                                 can_retry = True
                         else:
                             # Abandon after 9 tries
                             async with self.db_pool.acquire() as conn:
-                                await conn.execute("UPDATE userbot_dm_queue SET abandoned = TRUE, status = 'abandoned' WHERE id = $1", row_id)
+                                await conn.execute(
+                                    "UPDATE userbot_dm_queue SET abandoned = TRUE, status = 'abandoned' WHERE id = $1",
+                                    row_id)
                             continue
 
                         if not can_retry:
                             continue
 
                         # Execute the DM attempt
-                        success = await self.send_dm(u_id, row['message_text'], label)
-                        
+                        msg_to_send = row['message_text']
+
+                        # Dynamic hour calculation for 'Trial Started'
+                        if label == 'Trial Started':
+                            try:
+                                async with self.db_pool.acquire() as conn:
+                                    member_row = await conn.fetchrow(
+                                        "SELECT expiry_time FROM active_members WHERE member_id = $1",
+                                        u_id)
+                                    if member_row and member_row['expiry_time']:
+                                        expiry = member_row['expiry_time']
+                                        if expiry.tzinfo is None:
+                                            expiry = AMSTERDAM_TZ.localize(expiry)
+                                        
+                                        time_left = expiry - current_time
+                                        hours_left = max(0, int(time_left.total_seconds() / 3600))
+                                        
+                                        # Update the message with actual hours remaining
+                                        # Use regex to replace whatever hours value was there
+                                        import re
+                                        msg_to_send = re.sub(r'\*\*\d+ hours\*\*', f'**{hours_left} hours**', msg_to_send)
+                                        logger.info(f"🕒 Recalculated hours for {u_id}: {hours_left}h remaining")
+                            except Exception as e:
+                                logger.error(f"Error recalculating trial hours: {e}")
+
+                        success = await self.send_dm(u_id, msg_to_send,
+                                                     label)
+
                         async with self.db_pool.acquire() as conn:
                             if success:
-                                await conn.execute("""
+                                await conn.execute(
+                                    """
                                     UPDATE userbot_dm_queue 
                                     SET status = 'sent', sent_at = $1::timestamptz 
                                     WHERE id = $2::integer
                                 """, current_time, row_id)
-                                
+
                                 # Update onboarding widget for Welcome DM success
                                 if label == 'Welcome DM':
                                     try:
                                         # Main Bot manages this; we just update the status text in DB or log it
                                         # Since we're in dual-service, we use the debug log which Main Bot can see or just update widget
-                                        await conn.execute("INSERT INTO bot_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", f"widget_status_{u_id}", "✅ Welcome DM Sent Successfully!")
-                                    except Exception: pass
-                                
+                                        await conn.execute(
+                                            "INSERT INTO bot_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
+                                            f"widget_status_{u_id}",
+                                            "✅ Welcome DM Sent Successfully!")
+                                    except Exception:
+                                        pass
+
                                 # Quietly log success to console, skip debug group spam
                                 logger.info(f"✅ Sent {label} to {u_id}")
                             else:
-                                await conn.execute("""
+                                await conn.execute(
+                                    """
                                     UPDATE userbot_dm_queue 
                                     SET retry_count = retry_count + 1, 
                                         last_retry_at = $1::timestamptz 
                                     WHERE id = $2::integer
                                 """, current_time, row_id)
-                                
+
                                 # Update onboarding widget for Welcome DM failure
                                 if label == 'Welcome DM':
                                     try:
-                                        await conn.execute("INSERT INTO bot_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", f"widget_status_{u_id}", f"❌ Welcome DM Failed (Attempt {retries + 1})")
-                                    except Exception: pass
+                                        await conn.execute(
+                                            "INSERT INTO bot_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
+                                            f"widget_status_{u_id}",
+                                            f"❌ Welcome DM Failed (Attempt {retries + 1})"
+                                        )
+                                    except Exception:
+                                        pass
                 except Exception as e:
                     logger.error(f"Error in Queue processing block: {e}")
 
