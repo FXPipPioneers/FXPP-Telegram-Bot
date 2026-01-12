@@ -533,6 +533,19 @@ class UserbotService:
             return False
 
         try:
+            # Force a peer resolution if possible by checking the chat member status first
+            # this helps with "Peer ID Invalid" for new members
+            try:
+                for group_id in [FREE_GROUP_ID, VIP_GROUP_ID]:
+                    if group_id != 0:
+                        try:
+                            await self.client.get_chat_member(group_id, user_id)
+                            break # Found them, peer is now cached
+                        except:
+                            continue
+            except Exception as peer_err:
+                logger.debug(f"Peer pre-resolution attempt for {user_id} failed: {peer_err}")
+
             await asyncio.sleep(random.randint(5, 15))
             await self.client.send_message(user_id, message)
             await self.log_to_debug(f"✅ Sent {label} to {user_id}")

@@ -2698,54 +2698,57 @@ class TelegramTradingBot:
 
             async with self.db_pool.acquire() as conn:
                 # Direct database fetch to ensure we have the latest data
-                # Filter by those who joined in the specified week AND are still active (not expired yet)
+                # Filter by those who joined in the specified week
                 active_members = await conn.fetch("""
                     SELECT member_id, role_added_time, expiry_time 
                     FROM active_members 
                     WHERE role_added_time >= $1 AND role_added_time <= $2
-                    AND expiry_time > $3
-                """, monday, sunday_end, current_time)
+                    ORDER BY role_added_time DESC
+                """, monday, sunday_end)
 
             header = f"**Active VIP Trial Members - {week_label}**\n\n{date_range_str}\n"
 
-            if not active_members:
+            # Get all active trial members with dates
+            trials_with_time = []
+            joiners_by_date = {}
+
+            for row in active_members:
+                user_id = row['member_id']
+                expiry = row['expiry_time']
+                if expiry and expiry.tzinfo is None:
+                    expiry = AMSTERDAM_TZ.localize(expiry)
+                elif not expiry:
+                    # Fallback if expiry is missing
+                    expiry = current_time
+
+                joined = row['role_added_time']
+                if joined.tzinfo is None:
+                    joined = AMSTERDAM_TZ.localize(joined)
+
+                join_date_str = joined.strftime('%d-%m-%Y')
+
+                time_left = expiry - current_time
+                total_seconds = max(0, time_left.total_seconds())
+
+                trials_with_time.append({
+                    'user_id': str(user_id),
+                    'total_seconds': total_seconds,
+                    'expiry': expiry,
+                    'join_date': join_date_str,
+                    'joined': joined
+                })
+
+                # Group by date for weekly summary
+                if join_date_str not in joiners_by_date:
+                    joiners_by_date[join_date_str] = 0
+                joiners_by_date[join_date_str] += 1
+
+            if not trials_with_time:
                 text = header + "\nNo active trial members from this week at this time."
             else:
-                # Get all active trial members with dates
-                trials_with_time = []
-                joiners_by_date = {}
-
-                for row in active_members:
-                    user_id = row['member_id']
-                    expiry = row['expiry_time']
-                    if expiry.tzinfo is None:
-                        expiry = AMSTERDAM_TZ.localize(expiry)
-
-                    joined = row['role_added_time']
-                    if joined.tzinfo is None:
-                        joined = AMSTERDAM_TZ.localize(joined)
-
-                    join_date_str = joined.strftime('%d-%m-%Y')
-
-                    time_left = expiry - current_time
-                    total_seconds = max(0, time_left.total_seconds())
-
-                    trials_with_time.append({
-                        'user_id': str(user_id),
-                        'total_seconds': total_seconds,
-                        'expiry': expiry,
-                        'join_date': join_date_str,
-                        'joined': joined
-                    })
-
-                    # Group by date for weekly summary
-                    if join_date_str not in joiners_by_date:
-                        joiners_by_date[join_date_str] = 0
-                    joiners_by_date[join_date_str] += 1
-
                 trials_with_time.sort(key=lambda x: x['total_seconds'])
 
-                total_weekly = len(active_members)
+                total_weekly = len(trials_with_time)
                 text = header + f"**📊 Total This Week: {total_weekly} members**\n\n"
 
                 for date in sorted(joiners_by_date.keys(), reverse=True):
@@ -2769,35 +2772,10 @@ class TelegramTradingBot:
             await callback_query.answer()
         except Exception as e:
             logger.error(f"Error in show_vip_trial_joiners: {e}")
-            await callback_query.message.edit_text(f"❌ Error: {str(e)}")
-            await callback_query.answer()
-
-            # Weekly summary
-            total_weekly = len(trials_with_time)
-            text += f"**📊 Total This Week: {total_weekly} members**\n\n"
-
-            # Group members by date for compact display
-            members_by_date = {}
-            for trial in trials_with_time:
-                date_key = trial['join_date']
-                if date_key not in members_by_date:
-                    members_by_date[date_key] = []
-
-                hours = int(trial['total_seconds'] // 3600)
-                minutes = int((trial['total_seconds'] % 3600) // 60)
-                members_by_date[date_key].append(
-                    f"User {trial['user_id']} ({hours}h {minutes}m)")
-
-            # Compact display grouped by date
-            for date in sorted(members_by_date.keys(), reverse=True):
-                users = ", ".join(members_by_date[date])
-                daily_count = len(members_by_date[date])
-                text += f"**{date}** ({daily_count}): {users}\n"
-
-            await callback_query.message.edit_text(text)
-            await callback_query.answer()
-        except Exception as e:
-            await callback_query.message.edit_text(f"❌ Error: {str(e)}")
+            try:
+                await callback_query.message.edit_text(f"❌ Error: {str(e)}")
+            except:
+                pass
             await callback_query.answer()
 
     async def handle_peer_id_status(self, client: Client, message: Message):
