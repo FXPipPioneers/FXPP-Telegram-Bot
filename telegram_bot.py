@@ -598,6 +598,10 @@ class TelegramTradingBot:
                                          callback_query: CallbackQuery):
             await self.handle_active_trades_callback(client, callback_query)
 
+        @self.app.on_message(filters.group & ~filters.service)
+        async def group_message_handler(client, message: Message):
+            await self.handle_group_message(client, message)
+
         @self.app.on_message(filters.command("memberdatabase"))
         async def memberdatabase_command(client, message: Message):
             if not await self.is_owner(message.from_user.id):
@@ -771,7 +775,7 @@ class TelegramTradingBot:
             manual_tracking_only = pair in EXCLUDED_FROM_TRACKING
             if manual_tracking_only:
                 await self.log_to_debug(
-                    f"Adding {pair} to manual tracking only (no automatic price monitoring)"
+                    f"Adding {pair} to manual tracking only (no automatic price monitoring). Will be visible in /activetrades."
                 )
 
             assigned_api = await self.get_working_api_for_pair(
@@ -1902,6 +1906,9 @@ class TelegramTradingBot:
                     action, entry, tp1, tp2, tp3, sl, live_price)
                 price_line = f"**Current: {live_price:.5f}** {position_info['emoji']}"
                 position_text = f"_{position_info['position']}_"
+            elif trade.get('manual_tracking_only'):
+                price_line = "**Manual Tracking**"
+                position_text = "_Manage via /tradeoverride_"
             else:
                 price_line = "**Current: N/A**"
                 position_text = "_Unable to get price_"
@@ -3834,9 +3841,9 @@ class TelegramTradingBot:
             logger.error(
                 f"❌ Error processing join request from {join_request.from_user.first_name}: {type(e).__name__}: {e}"
             )
-            await self.log_to_debug(
-                f"❌ Failed to process join request from {join_request.from_user.first_name} (ID: {join_request.from_user.id}): {e}"
-            )
+            # await self.log_to_debug(
+            #     f"❌ Failed to process join request from {join_request.from_user.first_name} (ID: {join_request.from_user.id}): {e}"
+            # )
 
     async def process_member_update(self, client: Client,
                                     member_update: ChatMemberUpdated):
@@ -3887,11 +3894,10 @@ class TelegramTradingBot:
             except Exception as e:
                 logger.error(f"Error checking tracking status: {e}")
 
-        if not tracking_enabled:
-            await self.update_onboarding_widget(user.id, 1, 5, "Joined FREE Group (Tracking Disabled)", widget_id)
-            return
-
-                # Track for engagement
+        # Always record in free_group_joins for /newmemberslist regardless of tracking toggle
+        try:
+            current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
+            if self.db_pool:
                 async with self.db_pool.acquire() as conn:
                     await conn.execute(
                         '''INSERT INTO free_group_joins (user_id, joined_at, discount_sent)
@@ -3899,6 +3905,13 @@ class TelegramTradingBot:
                            ON CONFLICT (user_id) DO NOTHING''', user.id,
                         current_time)
 
+            if not tracking_enabled:
+                if widget_id:
+                    await self.update_onboarding_widget(user.id, 1, 5, "Joined FREE Group (Tracking Disabled)", widget_id)
+                return
+
+            if self.db_pool:
+                async with self.db_pool.acquire() as conn:
                     # Queue Welcome DM for Userbot - with 10 min delay handled by userbot_service
                     welcome_dm = MESSAGE_TEMPLATES["Welcome & Onboarding"][
                         "Welcome DM (New Free Group Member)"][
@@ -3913,9 +3926,10 @@ class TelegramTradingBot:
                         "INSERT INTO bot_status (status_key, status_value) VALUES ($1, $2) "
                         "ON CONFLICT (status_key) DO UPDATE SET status_value = $2",
                         f"onboarding_msg_{user.id}", str(widget_id))
-            except Exception as e:
-                error_msg = f"❌ Error tracking free group join for {user.id}: {e}"
-                logger.error(error_msg)
+        except Exception as e:
+            error_msg = f"❌ Error tracking free group join for {user.id}: {e}"
+            logger.error(error_msg)
+            if tracking_enabled:
                 await self.update_onboarding_widget(user.id, 1, 4, f"Error: {e}", widget_id)
 
     async def show_member_db_widget(self, message):
@@ -3972,6 +3986,23 @@ class TelegramTradingBot:
         Handle VIP group joins. Register trial users (those with approved join requests).
         Paid members joining via main link are not registered/tracked.
         """
+        # Check if member tracking is enabled
+        tracking_enabled = True
+        if self.db_pool:
+            try:
+                async with self.db_pool.acquire() as conn:
+                    val = await conn.fetchval(
+                        "SELECT setting_value FROM bot_settings WHERE setting_key = 'member_tracking_enabled'"
+                    )
+                    if val == 'false':
+                        tracking_enabled = False
+            except Exception as e:
+                logger.error(f"Error checking tracking status in VIP join: {e}")
+
+        # Record participation for /newmemberslist regardless of tracking (tracking only affects automated DMs)
+        # unless user is in brand deal mode where they want zero logs.
+        # But we must ensure they are in the database to be seen by the command.
+
         user_id_str = str(user.id)
         current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
         widget_id = getattr(self, 'onboarding_widgets', {}).get(user.id)
@@ -4035,7 +4066,8 @@ class TelegramTradingBot:
         # If user already used trial once, they shouldn't have gotten past join request approval
         # But as a safety check if they somehow made it here, send them a message and log it
         if has_used_trial:
-            await self.update_onboarding_widget(user.id, 3, 5, "❌ Rejected: Trial used before", widget_id)
+            if tracking_enabled:
+                await self.update_onboarding_widget(user.id, 3, 5, "❌ Rejected: Trial used before", widget_id)
 
             try:
                 rejection_dm = MESSAGE_TEMPLATES["Trial Status & Expiry"][
@@ -4052,13 +4084,14 @@ class TelegramTradingBot:
 
         # Calculate expiry time to ensure exactly 3 trading days
         expiry_time = self.calculate_trial_expiry_time(current_time)
-        widget_id = await self.update_onboarding_widget(user.id, 4, 5, f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
-
+        if tracking_enabled:
+            widget_id = await self.update_onboarding_widget(user.id, 4, 5, f"Registering 72h Trial (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
+        
         # Determine if joined during weekend for tracking
         is_weekend = self.is_weekend_time(current_time)
 
-        # Queue Trial Started DM if not weekend
-        if not is_weekend:
+        # Queue Trial Started DM if not weekend and tracking enabled
+        if not is_weekend and tracking_enabled:
             time_diff = expiry_time - current_time
             total_hours = int(time_diff.total_seconds() / 3600)
 
@@ -4068,16 +4101,24 @@ class TelegramTradingBot:
                     str(total_hours)).replace("{user_name}", user.first_name
                                               or "Trader")
 
-            async with self.db_pool.acquire() as conn:
-                await conn.execute(
-                    "INSERT INTO userbot_dm_queue (user_id, message_text, label, status, created_at) VALUES ($1, $2, 'Trial Started', 'pending', $3)",
-                    user.id, trial_started_msg, current_time)
+            if self.db_pool:
+                async with self.db_pool.acquire() as conn:
+                    # Check for existing pending Trial Started DMs to avoid duplicates
+                    exists = await conn.fetchval(
+                        "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Started' AND status = 'pending'",
+                        user.id)
+                    
+                    if not exists:
+                        await conn.execute(
+                            "INSERT INTO userbot_dm_queue (user_id, message_text, label, status, created_at) VALUES ($1, $2, 'Trial Started', 'pending', $3)",
+                            user.id, trial_started_msg, current_time)
 
         AUTO_ROLE_CONFIG['active_members'][user_id_str] = {
             'joined_at': current_time.isoformat(),
             'expiry_time': expiry_time.isoformat(),
             'weekend_delayed': is_weekend,
-            'chat_id': VIP_GROUP_ID
+            'chat_id': VIP_GROUP_ID,
+            'role_added_time': current_time.isoformat() # Added for /newmemberslist compatibility
         }
 
         AUTO_ROLE_CONFIG['role_history'][user_id_str] = {
@@ -4103,7 +4144,8 @@ class TelegramTradingBot:
                 logger.error(
                     f"Error recording trial activation in database: {e}")
 
-        await self.update_onboarding_widget(user.id, 5, 5, f"✅ Trial Active! (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
+        if tracking_enabled:
+            await self.update_onboarding_widget(user.id, 5, 5, f"✅ Trial Active! (Expires {expiry_time.strftime('%a %H:%M')})", widget_id)
         
         # Success reached, remove from memory tracking to allow fresh starts if needed
         if hasattr(self, 'onboarding_widgets'):

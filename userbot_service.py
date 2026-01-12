@@ -555,7 +555,7 @@ class UserbotService:
                 f"❌ Privacy Violation: Cannot message {user_id} ({label})")
             return False
         except PeerIdInvalid:
-            await self.log_to_debug(f"❌ Peer ID Invalid: {user_id} ({label})")
+            logger.warning(f"Peer ID Invalid for {user_id} ({label}) - will retry if queued")
             return False
         except FloodWait as e:
             wait_time = float(
