@@ -1442,11 +1442,11 @@ class TelegramTradingBot:
 
         track_price = entry_data.get('track_price', True)
 
-        if pair in EXCLUDED_FROM_TRACKING:
-            track_price = False
+        # BTCUSD, XAUUSD, GER40, US100 are still tracked but not automatically monitored
+        manual_tracking_only = pair.upper() in EXCLUDED_FROM_TRACKING
 
-        if sent_messages and track_price:
-            assigned_api = await self.get_working_api_for_pair(pair)
+        if sent_messages and (track_price or manual_tracking_only):
+            assigned_api = await self.get_working_api_for_pair(pair) if not manual_tracking_only else 'manual'
 
             live_price = await self.get_live_price(pair)
             if live_price:
@@ -1527,9 +1527,10 @@ class TelegramTradingBot:
                     'manual_overrides': [],
                     'breakeven_active':
                     False,
+                    'manual_tracking_only':
+                    manual_tracking_only,
                     'created_at':
-                    datetime.now(
-                        pytz.UTC).astimezone(AMSTERDAM_TZ).isoformat(),
+                    datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ).isoformat(),
                     'group_name':
                     group_name,
                     'channel_id':
@@ -5334,7 +5335,8 @@ class TelegramTradingBot:
                         "role_expired": row['role_expired'].isoformat(),
                         "dm_3_sent": row['dm_3_sent'],
                         "dm_7_sent": row['dm_7_sent'],
-                        "dm_14_sent": row['dm_14_sent']
+                        "dm_14_sent": row['dm_14_sent'],
+                        "expiry_dm_sent": row.get('expiry_dm_sent', True)
                     }
 
                 weekend_rows = await conn.fetch('SELECT * FROM weekend_pending'
@@ -5415,14 +5417,15 @@ class TelegramTradingBot:
                     role_expired = datetime.fromisoformat(data['role_expired'])
                     await conn.execute(
                         '''
-                        INSERT INTO dm_schedule (member_id, role_expired, guild_id, dm_3_sent, dm_7_sent, dm_14_sent)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        INSERT INTO dm_schedule (member_id, role_expired, guild_id, dm_3_sent, dm_7_sent, dm_14_sent, expiry_dm_sent)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
                         ON CONFLICT (member_id) DO UPDATE SET
-                        role_expired = $2, guild_id = $3, dm_3_sent = $4, dm_7_sent = $5, dm_14_sent = $6
+                        role_expired = $2, guild_id = $3, dm_3_sent = $4, dm_7_sent = $5, dm_14_sent = $6, expiry_dm_sent = $7
                     ''', int(member_id), role_expired, VIP_GROUP_ID,
                         data.get('dm_3_sent', False),
                         data.get('dm_7_sent', False),
-                        data.get('dm_14_sent', False))
+                        data.get('dm_14_sent', False),
+                        data.get('expiry_dm_sent', True))
         except Exception as e:
             logger.error(f"Error saving auto role config: {e}")
 
@@ -6381,8 +6384,8 @@ class TelegramTradingBot:
                     if current_time >= expiry_time:
                         expired_members.append(member_id)
 
-                for member_id in expired_members:
-                    await self.expire_trial(member_id)
+                if member_id in expired_members:
+                await self.expire_trial(member_id)
 
             except Exception as e:
                 await self.log_to_debug(f"Error in trial expiry loop: {e}",
@@ -6396,12 +6399,25 @@ class TelegramTradingBot:
             if not data:
                 return
 
+            # Prevent double-expiration if already marked in dm_schedule
+            if member_id in AUTO_ROLE_CONFIG['dm_schedule']:
+                if AUTO_ROLE_CONFIG['dm_schedule'][member_id].get('expiry_dm_sent'):
+                    # Already expired, just ensure it's removed from active
+                    if member_id in AUTO_ROLE_CONFIG['active_members']:
+                        del AUTO_ROLE_CONFIG['active_members'][member_id]
+                    return
+
             try:
-                await self.app.ban_chat_member(VIP_GROUP_ID, int(member_id))
-                await asyncio.sleep(1)
+                # Use a ban with a 60-second duration and then unban
+                # This ensures they are kicked immediately but can rejoin later
+                await self.app.ban_chat_member(VIP_GROUP_ID, int(member_id), until_date=datetime.now() + timedelta(seconds=60))
+                await asyncio.sleep(2)
+                # Unban to ensure they can rejoin if they pay later
                 await self.app.unban_chat_member(VIP_GROUP_ID, int(member_id))
+                logger.info(f"✅ Successfully kicked {member_id} from VIP group")
             except Exception as e:
                 logger.error(f"Error kicking member {member_id}: {e}")
+                await self.log_to_debug(f"⚠️ Failed to kick user {member_id} from VIP group: {e}")
 
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
@@ -6413,10 +6429,20 @@ class TelegramTradingBot:
                 'role_expired': current_time.isoformat(),
                 'dm_3_sent': False,
                 'dm_7_sent': False,
-                'dm_14_sent': False
+                'dm_14_sent': False,
+                'expiry_dm_sent': True  # Track that the expiry DM has been queued
             }
 
             del AUTO_ROLE_CONFIG['active_members'][member_id]
+
+            # DELETE from database immediately to prevent reload on restart
+            if self.db_pool:
+                try:
+                    async with self.db_pool.acquire() as conn:
+                        await conn.execute("DELETE FROM active_members WHERE member_id = $1", int(member_id))
+                        logger.info(f"🗑 Deleted {member_id} from active_members table")
+                except Exception as e:
+                    logger.error(f"Error deleting member {member_id} from DB: {e}")
 
             try:
                 # Queuing the message for userbot instead of sending directly
