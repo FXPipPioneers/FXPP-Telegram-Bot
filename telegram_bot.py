@@ -6385,7 +6385,7 @@ class TelegramTradingBot:
                         expired_members.append(member_id)
 
                 if member_id in expired_members:
-                await self.expire_trial(member_id)
+                    await self.expire_trial(member_id)
 
             except Exception as e:
                 await self.log_to_debug(f"Error in trial expiry loop: {e}",
