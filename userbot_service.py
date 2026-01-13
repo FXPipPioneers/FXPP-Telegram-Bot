@@ -693,9 +693,8 @@ class UserbotService:
                             if timedelta(hours=23) <= time_left <= timedelta(
                                     hours=25):
                                 exists = await conn.fetchval(
-                                    "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '24h_warning' AND created_at > $2",
-                                    member_id,
-                                    current_time - timedelta(hours=24))
+                                    "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '24h_warning'",
+                                    member_id)
                                 if not exists:
                                     msg = "⏰ **REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in 24 hours**.\n\nAfter that, you'll unfortunately lose access to the VIP Group. You've had great opportunities during these past 2 days. Don't let this last day slip away!"
                                     await conn.execute(
@@ -706,9 +705,8 @@ class UserbotService:
                             if timedelta(hours=2) <= time_left <= timedelta(
                                     hours=4):
                                 exists = await conn.fetchval(
-                                    "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '3h_warning' AND created_at > $2",
-                                    member_id,
-                                    current_time - timedelta(hours=24))
+                                    "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = '3h_warning'",
+                                    member_id)
                                 if not exists:
                                     msg = "⏰ **REMINDER! Your 3-day free trial (excluding the weekend) for our VIP Group will expire in just 3 hours**.\n\nYou're about to lose access to our VIP Group and the 6+ daily trade signals and opportunities it comes with. However, you can also keep your access! Upgrade from FREE to VIP through our website and instantly regain your access to our VIP Group.\n\n**Upgrade to VIP to keep your access:** https://whop.com/gold-pioneer/gold-pioneer/"
                                     await conn.execute(
@@ -722,8 +720,8 @@ class UserbotService:
                         for member in expired:
                             member_id = member['member_id']
                             exists = await conn.fetchval(
-                                "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Expired' AND created_at > $2",
-                                member_id, current_time - timedelta(hours=1))
+                                "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = 'Trial Expired'",
+                                member_id)
                             if not exists:
                                 msg = "Hey! Your **3-day free trial (excluding the weekend)** to the VIP Group has unfortunately **ran out**. We truly hope you were able to benefit with us & we hope to see you back soon! For now, feel free to continue following our trade signals in our Free Group: https://t.me/fxpippioneers\n\n**Want to rejoin the VIP Group? You can regain access through this link:** https://whop.com/gold-pioneer/gold-pioneer/"
                                 await conn.execute(

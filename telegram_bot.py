@@ -6384,7 +6384,7 @@ class TelegramTradingBot:
                     if current_time >= expiry_time:
                         expired_members.append(member_id)
 
-                if member_id in expired_members:
+                for member_id in expired_members:
                     await self.expire_trial(member_id)
 
             except Exception as e:
@@ -6410,7 +6410,7 @@ class TelegramTradingBot:
             try:
                 # Use a ban with a 60-second duration and then unban
                 # This ensures they are kicked immediately but can rejoin later
-                await self.app.ban_chat_member(VIP_GROUP_ID, int(member_id), until_date=datetime.now() + timedelta(seconds=60))
+                await self.app.ban_chat_member(VIP_GROUP_ID, int(member_id))
                 await asyncio.sleep(2)
                 # Unban to ensure they can rejoin if they pay later
                 await self.app.unban_chat_member(VIP_GROUP_ID, int(member_id))
