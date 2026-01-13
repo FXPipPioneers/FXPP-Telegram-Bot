@@ -795,19 +795,55 @@ class UserbotService:
                 # 5. Handle Monday Activations
                 try:
                     if current_time.weekday() == 0 and current_time.hour <= 1:
+                        # Part A: Weekend Joiners (Completely delayed)
                         delayed = []
                         async with self.db_pool.acquire() as conn:
                             delayed = await conn.fetch(
                                 "SELECT member_id FROM active_members WHERE weekend_delayed = TRUE AND NOT monday_notification_sent"
                             )
-                        for d in delayed:
-                            msg = "Hey! The weekend is over, so the trading markets have been opened again. That means your **3-day free trial (excluding the weekend)** has officially started."
+                            # Dynamic end time calculation
+                            async with self.db_pool.acquire() as conn:
+                                member_row = await conn.fetchrow("SELECT expiry_time FROM active_members WHERE member_id = $1", d['member_id'])
+                                end_date_str = "Monday" # Fallback
+                                if member_row and member_row['expiry_time']:
+                                    expiry = member_row['expiry_time']
+                                    if expiry.tzinfo is None: expiry = AMSTERDAM_TZ.localize(expiry)
+                                    end_date_str = expiry.strftime("%A %d %B at %H:%M").lower()
+
+                            msg = f"Hey! The weekend is over, so the trading markets have been opened again. That means your **3-day free trial (excluding the weekend)** has officially started. Your trial will end on **{end_date_str}**."
                             if await self.send_dm(d['member_id'], msg,
                                                   "Monday Activation"):
                                 async with self.db_pool.acquire() as conn:
                                     await conn.execute(
                                         "UPDATE active_members SET monday_notification_sent = TRUE WHERE member_id = $1",
                                         d['member_id'])
+
+                        # Part B: Weekday Joiners (Welcome back)
+                        # Find people who joined before the weekend, still have active time, 
+                        # and are NOT weekend_delayed (since those got the message above)
+                        welcome_back = []
+                        async with self.db_pool.acquire() as conn:
+                            welcome_back = await conn.fetch(
+                                "SELECT member_id FROM active_members WHERE weekend_delayed = FALSE AND expiry_time > $1 AND NOT monday_welcome_back_sent",
+                                current_time
+                            )
+                        for w in welcome_back:
+                            # Dynamic end time calculation
+                            async with self.db_pool.acquire() as conn:
+                                member_row = await conn.fetchrow("SELECT expiry_time FROM active_members WHERE member_id = $1", w['member_id'])
+                                end_date_str = "soon" # Fallback
+                                if member_row and member_row['expiry_time']:
+                                    expiry = member_row['expiry_time']
+                                    if expiry.tzinfo is None: expiry = AMSTERDAM_TZ.localize(expiry)
+                                    end_date_str = expiry.strftime("%A %d %B at %H:%M").lower()
+
+                            msg = f"Hey! The weekend is over, so the trading markets have been opened again. That means your **3-day free trial (excluding the weekend)** has officially resumed. Your trial will end on **{end_date_str}**. Let's make the most of it by securing some wins together!"
+                            if await self.send_dm(w['member_id'], msg,
+                                                  "Monday Welcome Back"):
+                                async with self.db_pool.acquire() as conn:
+                                    await conn.execute(
+                                        "UPDATE active_members SET monday_welcome_back_sent = TRUE WHERE member_id = $1",
+                                        w['member_id'])
                 except Exception as e:
                     logger.error(f"Error in Monday Activation block: {e}")
 
@@ -875,7 +911,7 @@ class UserbotService:
                         # Execute the DM attempt
                         msg_to_send = row['message_text']
 
-                        # Dynamic hour calculation for 'Trial Started'
+                        # Dynamic end time calculation for 'Trial Started'
                         if label == 'Trial Started':
                             try:
                                 async with self.db_pool.acquire() as conn:
@@ -887,16 +923,43 @@ class UserbotService:
                                         if expiry.tzinfo is None:
                                             expiry = AMSTERDAM_TZ.localize(expiry)
                                         
-                                        time_left = expiry - current_time
-                                        hours_left = max(0, int(time_left.total_seconds() / 3600))
+                                        # Format: "friday 16 january at 09:40"
+                                        end_date_str = expiry.strftime("%A %d %B at %H:%M").lower()
                                         
-                                        # Update the message with actual hours remaining
-                                        # Use regex to replace whatever hours value was there
+                                        # Update the message with actual end date
                                         import re
-                                        msg_to_send = re.sub(r'\*\*\d+ hours\*\*', f'**{hours_left} hours**', msg_to_send)
-                                        logger.info(f"🕒 Recalculated hours for {u_id}: {hours_left}h remaining")
+                                        msg_to_send = re.sub(r'end in \*\*\d+ hours\*\* from now', f'end on **{end_date_str}**', msg_to_send)
+                                        
+                                        logger.info(f"🕒 Updated end date for {u_id}: {end_date_str}")
                             except Exception as e:
-                                logger.error(f"Error recalculating trial hours: {e}")
+                                logger.error(f"Error updating trial end date: {e}")
+
+                        # Dynamic hour calculation for '24h_warning' or '3h_warning'
+                        elif label in ['24h_warning', '3h_warning']:
+                            try:
+                                async with self.db_pool.acquire() as conn:
+                                    member_row = await conn.fetchrow(
+                                        "SELECT expiry_time FROM active_members WHERE member_id = $1",
+                                        u_id)
+                                    if member_row and member_row['expiry_time']:
+                                        expiry = member_row['expiry_time']
+                                        if expiry.tzinfo is None:
+                                            expiry = AMSTERDAM_TZ.localize(expiry)
+                                        
+                                        # Calculate total calendar hours until expiration (includes weekends)
+                                        calendar_time_left = expiry - current_time
+                                        total_hours_until_end = max(0, int(calendar_time_left.total_seconds() / 3600))
+                                        
+                                        # Update the message with actual calendar hours remaining
+                                        import re
+                                        if label == '24h_warning':
+                                            msg_to_send = re.sub(r'expire in \d+ hours', f'expire in {total_hours_until_end} hours', msg_to_send)
+                                        elif label == '3h_warning':
+                                            msg_to_send = re.sub(r'expire in just \d+ hours', f'expire in just {total_hours_until_end} hours', msg_to_send)
+                                        
+                                        logger.info(f"🕒 Recalculated total hours (incl. weekend) for {u_id} ({label}): {total_hours_until_end}h remaining")
+                            except Exception as e:
+                                logger.error(f"Error recalculating trial hours for {label}: {e}")
 
                         success = await self.send_dm(u_id, msg_to_send,
                                                      label)
