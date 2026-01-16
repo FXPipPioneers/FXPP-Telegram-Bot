@@ -615,6 +615,12 @@ class TelegramTradingBot:
                 return
             await self.handle_member_db_callback(client, callback_query)
 
+        @self.app.on_message(filters.command("viewprofile"))
+        async def view_profile_command(client, message: Message):
+            if not await self.is_owner(message.from_user.id):
+                return
+            await self.handle_view_profile(client, message)
+
         @self.app.on_message(filters.private, group=-1)
         async def handle_private_message(client, message: Message):
             if not message.from_user:
@@ -713,6 +719,48 @@ class TelegramTradingBot:
         if user_id == 6664440870:
             return True
         return user_id == BOT_OWNER_USER_ID
+
+    async def handle_view_profile(self, client: Client, message: Message):
+        """Handle /viewprofile [user_id] command."""
+        args = message.command
+        if len(args) < 2:
+            await message.reply("❌ **Usage:** `/viewprofile [userid]`")
+            return
+
+        user_id_str = args[1]
+        try:
+            user_id = int(user_id_str)
+        except ValueError:
+            await message.reply("❌ **Invalid User ID.** Please provide a numeric ID.")
+            return
+
+        # Create the 'View Profile' button
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 View Profile", url=f"tg://user?id={user_id}")]
+        ])
+
+        # Message for debug group
+        debug_text = (
+            f"🔍 **Profile Request**\n\n"
+            f"**User ID:** `{user_id}`\n"
+            f"**Requested By:** {message.from_user.first_name} ({message.from_user.id})\n\n"
+            f"Click the button below to open the user's account."
+        )
+
+        try:
+            # Send to debug group instead of current chat
+            if DEBUG_GROUP_ID:
+                await self.app.send_message(
+                    DEBUG_GROUP_ID,
+                    debug_text,
+                    reply_markup=keyboard
+                )
+                await message.reply(f"✅ Profile link for `{user_id}` sent to **Debug Group**.")
+            else:
+                await message.reply("❌ **Error:** `DEBUG_GROUP_ID` is not configured.")
+        except Exception as e:
+            logger.error(f"Error in /viewprofile: {e}")
+            await message.reply(f"❌ **Failed to send to Debug Group:** {str(e)}")
 
     async def handle_group_message(self, client: Client, message: Message):
         """Handle messages in groups"""
