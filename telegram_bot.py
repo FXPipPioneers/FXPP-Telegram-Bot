@@ -6749,6 +6749,7 @@ class TelegramTradingBot:
                                "Check if peer ID is connected for a user"),
                     BotCommand("dbstatus", "Database health check"),
                     BotCommand("dmstatus", "DM statistics"),
+                    BotCommand("viewprofile", "Get profile link button in debug group"),
                 ]
                 try:
                     await self.app.set_bot_commands(
