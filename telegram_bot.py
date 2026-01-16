@@ -3077,26 +3077,43 @@ class TelegramTradingBot:
         if self.db_pool:
             try:
                 async with self.db_pool.acquire() as conn:
-                    await conn.execute(
-                        "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, $3, 'pending')",
-                        user_id, welcome_msg, "Welcome DM (Manual)")
+                    # Deduplicate check
+                    exists = await conn.fetchval(
+                        "SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = $2 AND status = 'pending'",
+                        user_id, "Welcome DM (Manual)")
+                    
+                    if not exists:
+                        await conn.execute(
+                            "INSERT INTO userbot_dm_queue (user_id, message_text, label, status) VALUES ($1, $2, $3, 'pending')",
+                            user_id, welcome_msg, "Welcome DM (Manual)")
 
-                if callback_query:
-                    await callback_query.message.edit_text(
-                        f"✅ **Queued!**\n\n"
-                        f"Welcome DM queued for user **{user_id}** via Userbot Service."
-                    )
-                else:
-                    await user_message.reply(
-                        f"✅ **Queued!**\n\n"
-                        f"Welcome DM queued for user **{user_id}** via Userbot Service."
-                    )
+                        if callback_query:
+                            await callback_query.message.edit_text(
+                                f"✅ **Queued!**\n\n"
+                                f"Welcome DM queued for user **{user_id}** via Userbot Service."
+                            )
+                        else:
+                            await user_message.reply(
+                                f"✅ **Queued!**\n\n"
+                                f"Welcome DM queued for user **{user_id}** via Userbot Service."
+                            )
+                    else:
+                        if callback_query:
+                            await callback_query.message.edit_text(
+                                f"⚠️ **Already Pending**\n\n"
+                                f"A Welcome DM is already in the queue for user **{user_id}**."
+                            )
+                        else:
+                            await user_message.reply(
+                                f"⚠️ **Already Pending**\n\n"
+                                f"A Welcome DM is already in the queue for user **{user_id}**."
+                            )
                 return
             except Exception as db_err:
                 logger.warning(
                     f"Could not queue welcome DM for user {user_id}: {db_err}")
 
-        # Fallback to direct send if DB fails or not available
+        # Fallback to direct send ONLY if DB fails or not available
         try:
             # Establish peer connection first
             try:
@@ -4128,11 +4145,21 @@ class TelegramTradingBot:
                 rejection_dm = MESSAGE_TEMPLATES["Trial Status & Expiry"][
                     "Trial Rejected (Used Before)"]["message"].replace(
                         "{user_name}", user.first_name)
-                await client.send_message(user.id,
+                
+                if self.db_pool:
+                    async with self.db_pool.acquire() as conn:
+                        # Deduplicate: check if already in queue
+                        exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = $2 AND status = 'pending'", user.id, "Trial Rejected")
+                        if not exists:
+                            await conn.execute(
+                                "INSERT INTO userbot_dm_queue (user_id, message_text, label) VALUES ($1, $2, $3)",
+                                user.id, rejection_dm, "Trial Rejected")
+                else:
+                    await client.send_message(user.id,
                                           rejection_dm,
                                           disable_web_page_preview=True)
             except Exception as e:
-                logger.error(f"Could not send DM to {user.first_name}: {e}")
+                logger.error(f"Could not queue rejection DM to {user.first_name}: {e}")
 
             # Don't kick - they should have been rejected at join request stage
             return
@@ -4700,10 +4727,26 @@ class TelegramTradingBot:
 
         tp_status = f"TPs hit: {', '.join(tp_hits)}" if tp_hits else ""
 
+        # Professional randomized breakeven templates
+        breakeven_templates = [
+            "TP2 has been hit & price has reversed to breakeven, so as usual, we're out safe 🫡",
+            "Price returned to breakeven after hitting TP2. Smart exit, we secured profits and protected capital 💼✅",
+            "Breakeven reached after TP2 hit. Clean trade management - we're out with gains secured 🎯🔒",
+            "TP2 was hit, now back to breakeven. Perfect trade execution, we exit safe and profitable 📊🛡️",
+            "Price reversed to entry after TP2. Textbook risk management - we're out with profits locked in 💰🧠",
+            "Breakeven hit after TP2. Smart trading discipline pays off. We're out safe and ahead 🚀⚖️",
+            "Back to breakeven post-TP2. This is how we protect profits. Clean exit, clean conscience 💎🔐",
+            "TP2 secured, now at breakeven. Professional trade management - we exit with gains protected 📈🛡️",
+            "Price action brought us back to entry after TP2. Strategic exit with profits in the bag 🎯💼",
+            "Breakeven reached after TP2 hit. This is disciplined trading - we're out safe with profits secured 🧘‍♂️💸"
+        ]
+        import random
+        selected_text = random.choice(breakeven_templates)
+
         notification = (f"**BREAKEVEN HIT** {pair} {action}\n\n"
+                        f"{selected_text}\n\n"
                         f"Price returned to entry ({live_entry:.5f})\n"
-                        f"{tp_status}\n"
-                        f"Trade closed at breakeven.")
+                        f"{tp_status}")
 
         chat_id = trade.get('chat_id') or trade.get('channel_id')
         if chat_id:
@@ -6375,14 +6418,27 @@ class TelegramTradingBot:
                 current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
                 expired_members = []
 
-                for member_id, data in list(
-                        AUTO_ROLE_CONFIG['active_members'].items()):
+                # Fetch all members who have already expired but are still in active_members table
+                if self.db_pool:
+                    try:
+                        async with self.db_pool.acquire() as conn:
+                            rows = await conn.fetch(
+                                "SELECT member_id, expiry_time FROM active_members WHERE expiry_time <= $1",
+                                current_time
+                            )
+                            for row in rows:
+                                expired_members.append(str(row['member_id']))
+                    except Exception as e:
+                        logger.error(f"Error fetching expired members from DB: {e}")
+
+                # Also check in-memory for safety (legacy support)
+                for member_id, data in list(AUTO_ROLE_CONFIG['active_members'].items()):
                     expiry_time = datetime.fromisoformat(data['expiry_time'])
                     if expiry_time.tzinfo is None:
                         expiry_time = AMSTERDAM_TZ.localize(expiry_time)
-
                     if current_time >= expiry_time:
-                        expired_members.append(member_id)
+                        if member_id not in expired_members:
+                            expired_members.append(member_id)
 
                 for member_id in expired_members:
                     await self.expire_trial(member_id)
@@ -6395,47 +6451,49 @@ class TelegramTradingBot:
 
     async def expire_trial(self, member_id: str):
         try:
-            data = AUTO_ROLE_CONFIG['active_members'].get(member_id)
-            if not data:
-                return
-
-            # Prevent double-expiration if already marked in dm_schedule
+            # First, check if they are already in dm_schedule (prevent repeat expiry DMs)
             if member_id in AUTO_ROLE_CONFIG['dm_schedule']:
                 if AUTO_ROLE_CONFIG['dm_schedule'][member_id].get('expiry_dm_sent'):
-                    # Already expired, just ensure it's removed from active
+                    # Already expired in memory, ensure they are also gone from DB
+                    if self.db_pool:
+                        try:
+                            async with self.db_pool.acquire() as conn:
+                                await conn.execute("DELETE FROM active_members WHERE member_id = $1", int(member_id))
+                        except Exception: pass
+                    
                     if member_id in AUTO_ROLE_CONFIG['active_members']:
                         del AUTO_ROLE_CONFIG['active_members'][member_id]
                     return
 
+            # Perform the kick
             try:
-                # Use a ban with a 60-second duration and then unban
-                # This ensures they are kicked immediately but can rejoin later
                 await self.app.ban_chat_member(VIP_GROUP_ID, int(member_id))
                 await asyncio.sleep(2)
-                # Unban to ensure they can rejoin if they pay later
                 await self.app.unban_chat_member(VIP_GROUP_ID, int(member_id))
                 logger.info(f"✅ Successfully kicked {member_id} from VIP group")
             except Exception as e:
                 logger.error(f"Error kicking member {member_id}: {e}")
-                await self.log_to_debug(f"⚠️ Failed to kick user {member_id} from VIP group: {e}")
+                # We still proceed to cleanup even if kick fails (user might have already left)
 
             current_time = datetime.now(pytz.UTC).astimezone(AMSTERDAM_TZ)
 
+            # Update history and DM schedule
             if member_id in AUTO_ROLE_CONFIG['role_history']:
-                AUTO_ROLE_CONFIG['role_history'][member_id][
-                    'last_expired'] = current_time.isoformat()
+                AUTO_ROLE_CONFIG['role_history'][member_id]['last_expired'] = current_time.isoformat()
 
             AUTO_ROLE_CONFIG['dm_schedule'][member_id] = {
                 'role_expired': current_time.isoformat(),
                 'dm_3_sent': False,
                 'dm_7_sent': False,
                 'dm_14_sent': False,
-                'expiry_dm_sent': True  # Track that the expiry DM has been queued
+                'expiry_dm_sent': True 
             }
 
-            del AUTO_ROLE_CONFIG['active_members'][member_id]
+            # Cleanup
+            if member_id in AUTO_ROLE_CONFIG['active_members']:
+                del AUTO_ROLE_CONFIG['active_members'][member_id]
 
-            # DELETE from database immediately to prevent reload on restart
+            # DELETE from database (CRITICAL for restarts)
             if self.db_pool:
                 try:
                     async with self.db_pool.acquire() as conn:
@@ -6444,20 +6502,21 @@ class TelegramTradingBot:
                 except Exception as e:
                     logger.error(f"Error deleting member {member_id} from DB: {e}")
 
+            # Queuing the message for userbot
             try:
-                # Queuing the message for userbot instead of sending directly
-                expiry_msg = MESSAGE_TEMPLATES["Trial Status & Expiry"][
-                    "Trial Expired"]["message"]
+                expiry_msg = MESSAGE_TEMPLATES["Trial Status & Expiry"]["Trial Expired"]["message"]
                 if self.db_pool:
                     async with self.db_pool.acquire() as conn:
-                        await conn.execute(
-                            "INSERT INTO userbot_dm_queue (user_id, message_text, label) VALUES ($1, $2, $3)",
-                            int(member_id), expiry_msg, "Trial Expired")
+                        # Deduplicate
+                        exists = await conn.fetchval("SELECT id FROM userbot_dm_queue WHERE user_id = $1 AND label = $2 AND status = 'pending'", int(member_id), "Trial Expired")
+                        if not exists:
+                            await conn.execute(
+                                "INSERT INTO userbot_dm_queue (user_id, message_text, label) VALUES ($1, $2, $3)",
+                                int(member_id), expiry_msg, "Trial Expired")
                 else:
                     await self.app.send_message(int(member_id), expiry_msg)
             except Exception as e:
-                logger.error(
-                    f"Could not queue/send expiry DM to {member_id}: {e}")
+                logger.error(f"Could not queue expiry DM to {member_id}: {e}")
 
             await self.save_auto_role_config()
             logger.info(f"Trial expired for user {member_id}")
