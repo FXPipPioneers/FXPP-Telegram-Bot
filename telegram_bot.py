@@ -5379,6 +5379,11 @@ class TelegramTradingBot:
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='userbot_dm_queue' AND column_name='sent_at') THEN
                         ALTER TABLE userbot_dm_queue ADD COLUMN sent_at TIMESTAMP WITH TIME ZONE;
                     END IF;
+                    
+                    -- Fix bot_status table if it uses 'id' instead of 'status_key'
+                    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bot_status' AND column_name='id') THEN
+                        ALTER TABLE bot_status RENAME COLUMN id TO status_key;
+                    END IF;
                 END $$;
             """)
 
